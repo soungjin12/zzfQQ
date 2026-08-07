@@ -32,17 +32,31 @@ const emptyDraft: AnalysisDraft = {
 
 const sourceLabels: Record<InputSource, string> = {
   direct: "직접 입력",
-  upload: "업로드",
-  database: "기존 DB 연동",
+  upload: "파일/이미지",
+  database: "DB 기준",
+};
+
+const sourceDescriptions: Record<InputSource, string> = {
+  direct: "문제와 풀이를 직접 적어서 바로 분석합니다.",
+  upload: "텍스트 파일이나 문제 이미지를 붙여 분석 정확도를 높입니다.",
+  database: "저장된 기록을 기준으로 누적 경향을 확인합니다.",
 };
 
 const statusLabels: Record<ReviewStatus, string> = {
   pending: "복습 대기",
-  reviewing: "진행 중",
+  reviewing: "복습 중",
+  done: "완료",
+};
+
+const statusFilterLabels: Record<ReviewStatus | "all", string> = {
+  all: "전체",
+  pending: "대기",
+  reviewing: "진행",
   done: "완료",
 };
 
 const allowedImageTypes = ["image/jpeg", "image/png", "image/webp"];
+const maxImageSize = 5 * 1024 * 1024;
 
 const defaultSettings: AnalysisSettings = {
   default_subject: "수학",
@@ -57,10 +71,8 @@ type DashboardWorkspaceProps = {
 
 export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
   const [draft, setDraft] = useState<AnalysisDraft>(emptyDraft);
-  const [records, setRecords] = useState<AnalysisRecord[]>(sampleAnalyses);
-  const [selectedRecord, setSelectedRecord] = useState<AnalysisRecord | null>(
-    sampleAnalyses[0],
-  );
+  const [records, setRecords] = useState<AnalysisRecord[]>([]);
+  const [selectedRecord, setSelectedRecord] = useState<AnalysisRecord | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
@@ -69,7 +81,9 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
   const [isGeneratingSolution, setIsGeneratingSolution] = useState(false);
   const [settings, setSettings] = useState<AnalysisSettings>(defaultSettings);
   const [schemaReady, setSchemaReady] = useState(false);
-  const [syncMessage, setSyncMessage] = useState("동기화 중");
+  const [syncMessage, setSyncMessage] = useState("기록을 불러오는 중입니다.");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState<ReviewStatus | "all">("all");
 
   useEffect(() => {
     let isMounted = true;
@@ -91,35 +105,39 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
         return;
       }
 
-      if (settingsResult.data) {
-        const nextSettings = normalizeSettings(settingsResult.data);
-        setSettings(nextSettings);
-        setDraft((currentDraft) => ({
-          ...currentDraft,
-          source_type: nextSettings.default_source_type,
-          subject: nextSettings.default_subject,
-        }));
-      }
+      const nextSettings = settingsResult.data
+        ? normalizeSettings(settingsResult.data)
+        : defaultSettings;
+      setSettings(nextSettings);
+      setDraft((currentDraft) => ({
+        ...currentDraft,
+        source_type: nextSettings.default_source_type,
+        subject: nextSettings.default_subject,
+      }));
 
       if (recordsResult.error) {
         setSchemaReady(false);
-        setSyncMessage("설정 필요");
-        setRecords(sampleAnalyses);
-        setSelectedRecord(sampleAnalyses[0]);
+        setRecords([]);
+        setSelectedRecord(null);
+        setSyncMessage("DB 설정을 확인해야 합니다. 입력한 문제는 임시로만 보일 수 있습니다.");
       } else {
         setSchemaReady(true);
         const loadedRecords = ((recordsResult.data ?? []) as AnalysisRecord[]).map(
           normalizeRecord,
         );
         const shouldUseSamples =
-          loadedRecords.length === 0 &&
-          (settingsResult.data as AnalysisSettings | null)?.show_sample_records;
+          loadedRecords.length === 0 && nextSettings.show_sample_records;
+        const visibleRecords = shouldUseSamples ? sampleAnalyses : loadedRecords;
 
-        setRecords(shouldUseSamples ? sampleAnalyses : loadedRecords);
-        setSelectedRecord(
-          shouldUseSamples ? sampleAnalyses[0] : (loadedRecords[0] ?? null),
+        setRecords(visibleRecords);
+        setSelectedRecord(visibleRecords[0] ?? null);
+        setSyncMessage(
+          loadedRecords.length > 0
+            ? "DB 기록을 불러왔습니다."
+            : shouldUseSamples
+              ? "저장된 기록이 없어 샘플을 표시합니다."
+              : "아직 저장된 문제가 없습니다.",
         );
-        setSyncMessage(loadedRecords.length > 0 ? "연결 완료" : "기록 없음");
       }
 
       setIsLoading(false);
@@ -132,12 +150,19 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (imagePreviewUrl) {
+        URL.revokeObjectURL(imagePreviewUrl);
+      }
+    };
+  }, [imagePreviewUrl]);
+
   const stats = useMemo(() => {
     const total = records.length;
     const patternCount = new Map<string, number>();
     const unitCount = new Map<string, number>();
-    const pendingCount = records.filter((record) => record.status !== "done")
-      .length;
+    const pendingCount = records.filter((record) => record.status !== "done").length;
     const confidenceAverage =
       total === 0
         ? 0
@@ -159,22 +184,62 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     };
   }, [records]);
 
+  const filteredRecords = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+
+    return records.filter((record) => {
+      const matchesStatus =
+        statusFilter === "all" ? true : record.status === statusFilter;
+      const matchesQuery = query
+        ? [
+            record.subject,
+            record.unit,
+            record.question_title,
+            record.pattern,
+            record.problem_statement,
+          ]
+            .join(" ")
+            .toLowerCase()
+            .includes(query)
+        : true;
+
+      return matchesStatus && matchesQuery;
+    });
+  }, [records, searchQuery, statusFilter]);
+
+  const requiredProgress = [
+    { label: "단원", done: Boolean(draft.unit.trim()) },
+    { label: "문제", done: Boolean(draft.problem_statement.trim()) },
+    { label: "내 답", done: Boolean(draft.wrong_answer.trim()) },
+    { label: "정답", done: Boolean(draft.correct_answer.trim()) },
+  ];
+  const completedRequiredCount = requiredProgress.filter((item) => item.done).length;
+  const canGenerateSolution =
+    Boolean(imageFile) &&
+    Boolean(draft.correct_answer.trim()) &&
+    !isGeneratingSolution;
+  const aiButtonReason = !imageFile
+    ? "이미지를 첨부하면 AI 풀이를 만들 수 있습니다."
+    : !draft.correct_answer.trim()
+      ? "정답을 먼저 입력해야 풀이를 생성합니다."
+      : "이미지와 정답을 바탕으로 풀이를 생성합니다.";
+
   const overviewItems = [
-    { label: "분석한 문항", value: String(stats.total), note: "내 기록 기준" },
+    { label: "분석한 문제", value: String(stats.total), note: "내 기록 기준" },
     {
-      label: "감지된 패턴",
+      label: "감지된 유형",
       value: String(stats.patternEntries.length),
-      note: "분류 결과",
+      note: "오답 패턴",
     },
     {
       label: "복습 대기",
       value: String(stats.pendingCount),
-      note: "완료 전 기록",
+      note: "미완료",
     },
     {
       label: "평균 신뢰도",
       value: `${stats.confidenceAverage}%`,
-      note: "평균값",
+      note: "입력 충실도",
     },
   ];
 
@@ -202,7 +267,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       detailed_explanation: record.detailed_explanation || "",
       mistake_reason:
         record.mistake_reason ||
-        "정확한 문제 풀이가 만들어진 뒤 오답 원인을 비교할 수 있습니다.",
+        "정답 풀이와 내 풀이가 처음 달라지는 지점을 확인해야 합니다.",
       solution_strategy: record.solution_strategy || "",
     };
   }
@@ -225,6 +290,16 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     }));
   }
 
+  function resetDraft() {
+    setDraft({
+      ...emptyDraft,
+      source_type: settings.default_source_type,
+      subject: settings.default_subject,
+    });
+    clearImage();
+    setSyncMessage("새 문제를 입력할 준비가 되었습니다.");
+  }
+
   async function handleUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
 
@@ -237,9 +312,9 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       ...currentDraft,
       source_type: "upload",
       question_title: currentDraft.question_title || file.name,
-      problem_statement: text.slice(0, 1600),
+      problem_statement: text.slice(0, 1800),
     }));
-    setSyncMessage("업로드한 텍스트를 문제 내용에 반영했습니다.");
+    setSyncMessage("텍스트 파일 내용을 문제 입력칸에 반영했습니다.");
   }
 
   function handleImageUpload(event: ChangeEvent<HTMLInputElement>) {
@@ -250,7 +325,12 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     }
 
     if (!allowedImageTypes.includes(file.type)) {
-      setSyncMessage("이미지는 JPG, PNG, WebP 형식만 첨부할 수 있습니다.");
+      setSyncMessage("문제 이미지는 JPG, PNG, WebP 형식만 첨부할 수 있습니다.");
+      return;
+    }
+
+    if (file.size > maxImageSize) {
+      setSyncMessage("이미지는 5MB 이하만 첨부할 수 있습니다.");
       return;
     }
 
@@ -265,7 +345,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       source_type: "upload",
       question_title: currentDraft.question_title || file.name,
     }));
-    setSyncMessage("문제 이미지를 첨부했습니다. 설명을 함께 입력하면 분석 품질이 좋아집니다.");
+    setSyncMessage("문제 이미지를 첨부했습니다. 정답을 입력하면 AI 풀이를 만들 수 있습니다.");
   }
 
   function clearImage() {
@@ -338,7 +418,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
         ...currentDraft,
         provided_solution: data.solution ?? "",
       }));
-      setSyncMessage("AI 풀이를 문제의 옳은 풀이 칸에 반영했습니다.");
+      setSyncMessage("AI 풀이를 정답 풀이 입력칸에 반영했습니다.");
     } catch {
       setSyncMessage("AI 풀이 생성 중 오류가 발생했습니다.");
     } finally {
@@ -383,6 +463,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSaving(true);
+    setSyncMessage("분석 결과를 저장하는 중입니다.");
 
     const supabase = createClient();
     const { data: userData } = await supabase.auth.getUser();
@@ -432,10 +513,10 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     clearImage();
     setSyncMessage(
       uploadError
-        ? "이미지 Storage 업로드는 실패했지만 분석 기록은 화면에 반영했습니다. Storage 버킷 설정을 확인해주세요."
+        ? "이미지 업로드는 실패했지만 분석 기록은 화면에 반영했습니다. Storage 버킷 설정을 확인해주세요."
         : error
-        ? "Supabase 저장은 실패해 로컬 화면에만 반영했습니다. SQL 스키마 적용을 확인해주세요."
-        : "저장 완료",
+          ? "DB 저장에 실패해 이 화면에만 임시 반영했습니다. SQL 스키마와 권한을 확인해주세요."
+          : "분석 결과를 저장했습니다.",
     );
     setIsSaving(false);
   }
@@ -461,19 +542,20 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       .update({ status })
       .eq("id", record.id);
 
-    setSyncMessage(error ? "상태 저장 실패" : "상태 저장 완료");
+    setSyncMessage(error ? "상태 저장에 실패했습니다." : "복습 상태를 저장했습니다.");
   }
 
   async function saveSettings(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsSavingSettings(true);
+    setSyncMessage("설정을 저장하는 중입니다.");
 
     const supabase = createClient();
     const { data: userData } = await supabase.auth.getUser();
     const userId = userData.user?.id;
 
     if (!userId) {
-      setSyncMessage("로그인 세션 확인 필요");
+      setSyncMessage("로그인 세션을 확인해야 합니다.");
       setIsSavingSettings(false);
       return;
     }
@@ -489,7 +571,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       .single();
 
     if (error) {
-      setSyncMessage("설정 저장 실패");
+      setSyncMessage("설정 저장에 실패했습니다.");
     } else {
       const nextSettings = normalizeSettings(data as AnalysisSettings);
       setSettings(nextSettings);
@@ -498,7 +580,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
         source_type: nextSettings.default_source_type,
         subject: currentDraft.subject || nextSettings.default_subject,
       }));
-      setSyncMessage("설정 저장 완료");
+      setSyncMessage("설정을 저장했습니다.");
     }
 
     setIsSavingSettings(false);
@@ -508,15 +590,20 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     <div className="grid flex-1 gap-4 py-4 lg:grid-cols-[220px_1fr]">
       <aside className="border border-[var(--line)] bg-white p-3 shadow-sm">
         <nav className="grid grid-cols-2 gap-2 lg:grid-cols-1">
-          {["분석", "기록", "통계", "설정"].map((item, index) => (
+          {[
+            ["분석", "analysis"],
+            ["기록", "records"],
+            ["통계", "stats"],
+            ["설정", "settings"],
+          ].map(([item, target], index) => (
             <a
               className={`rounded-lg px-3 py-3 text-sm font-semibold transition ${
                 index === 0
                   ? "bg-[var(--accent)] text-white"
                   : "text-[var(--muted)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
               }`}
-              href={`#${item}`}
-              key={item}
+              href={`#${target}`}
+              key={target}
             >
               {item}
             </a>
@@ -544,60 +631,91 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
           ))}
         </div>
 
-        <div className="border border-[var(--line)] bg-white px-4 py-3 text-sm text-[var(--muted)] shadow-sm">
-          <strong className="text-[var(--app-fg)]">DB</strong>
-          <span className="ml-2">{isLoading ? "동기화 중" : syncMessage}</span>
-          <span className="ml-2 text-xs">사용자: {userEmail ?? "세션 확인됨"}</span>
+        <div className="flex flex-col gap-2 border border-[var(--line)] bg-white px-4 py-3 text-sm text-[var(--muted)] shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <p>
+            <strong className="text-[var(--app-fg)]">상태</strong>
+            <span className="ml-2">{isLoading ? "동기화 중" : syncMessage}</span>
+          </p>
+          <p className="text-xs">사용자: {userEmail ?? "세션 확인됨"}</p>
         </div>
 
-        <div
+        <section
           className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]"
-          id="분석"
+          id="analysis"
         >
-          <section className="border border-[var(--line)] bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-1">
-              <h2 className="text-xl font-bold">오답 입력/분석</h2>
+          <div className="border border-[var(--line)] bg-white p-5 shadow-sm">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-xl font-bold">오답 입력</h2>
+                <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+                  문제, 내 답, 정답을 넣으면 오답 유형과 복습 방향을 바로 정리합니다.
+                </p>
+              </div>
+              <button
+                className="rounded-lg border border-[var(--line)] px-3 py-2 text-sm font-bold text-[var(--muted)] transition hover:bg-[var(--app-bg)]"
+                onClick={resetDraft}
+                type="button"
+              >
+                새 문제
+              </button>
             </div>
 
-            <div className="mt-5 grid grid-cols-3 gap-2 rounded-lg bg-[var(--app-bg)] p-1">
+            <div className="mt-5 grid gap-2 sm:grid-cols-3">
               {(Object.keys(sourceLabels) as InputSource[]).map((sourceType) => (
                 <button
-                  className={`rounded-md px-3 py-2 text-sm font-bold ${
+                  className={`rounded-lg border px-3 py-3 text-left text-sm transition ${
                     draft.source_type === sourceType
-                      ? "bg-white text-[var(--app-fg)] shadow-sm"
-                      : "text-[var(--muted)]"
+                      ? "border-[var(--accent)] bg-[var(--accent-soft)] text-[var(--accent)]"
+                      : "border-[var(--line)] bg-white text-[var(--muted)] hover:bg-[var(--app-bg)]"
                   }`}
                   key={sourceType}
                   onClick={() => updateSource(sourceType)}
                   type="button"
                 >
-                  {sourceLabels[sourceType]}
+                  <strong className="block">{sourceLabels[sourceType]}</strong>
+                  <span className="mt-1 block text-xs leading-5">
+                    {sourceDescriptions[sourceType]}
+                  </span>
                 </button>
               ))}
             </div>
 
-            {draft.source_type === "upload" ? (
-              <div className="mt-4 grid gap-3 sm:grid-cols-2">
-                <label className="grid gap-2 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-4 text-sm font-semibold">
-                  텍스트 파일 업로드
-                  <input accept=".txt,.md" onChange={handleUpload} type="file" />
-                </label>
-                <label className="grid gap-2 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-4 text-sm font-semibold">
-                  문제 이미지 첨부
-                  <input
-                    accept="image/jpeg,image/png,image/webp"
-                    onChange={handleImageUpload}
-                    type="file"
-                  />
-                </label>
-              </div>
-            ) : null}
+            <div className="mt-4 grid gap-3 sm:grid-cols-2">
+              <label className="grid gap-2 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-4 text-sm font-semibold">
+                텍스트 파일 불러오기
+                <input accept=".txt,.md" onChange={handleUpload} type="file" />
+              </label>
+              <label className="grid gap-2 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-4 text-sm font-semibold">
+                문제 이미지 첨부
+                <input
+                  accept="image/jpeg,image/png,image/webp"
+                  onChange={handleImageUpload}
+                  type="file"
+                />
+              </label>
+            </div>
 
-            {draft.source_type === "database" ? (
-              <div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--accent-soft)] p-4 text-sm leading-6 text-[var(--accent)]">
-                Supabase 저장 기록을 기준으로 관리합니다.
+            <div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--app-bg)] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm font-semibold">
+                  필수 입력 {completedRequiredCount}/{requiredProgress.length}
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {requiredProgress.map((item) => (
+                    <span
+                      className={`rounded-lg px-2 py-1 text-xs font-bold ${
+                        item.done
+                          ? "bg-emerald-50 text-emerald-700"
+                          : "bg-white text-[var(--muted)] ring-1 ring-[var(--line)]"
+                      }`}
+                      key={item.label}
+                    >
+                      {item.done ? "완료" : "필요"} · {item.label}
+                    </span>
+                  ))}
+                </div>
               </div>
-            ) : null}
+            </div>
 
             <form className="mt-5 grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit}>
               <div className="grid gap-3 rounded-lg border border-[var(--line)] bg-[var(--app-bg)] p-4 sm:col-span-2 sm:grid-cols-[220px_1fr]">
@@ -606,41 +724,31 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                     // eslint-disable-next-line @next/next/no-img-element
                     <img
                       alt="첨부한 문제 이미지 미리보기"
-                      className="h-full max-h-48 w-full object-contain"
+                      className="max-h-56 w-full object-contain"
                       src={imagePreviewUrl}
                     />
                   ) : (
                     <span className="px-4 text-center text-sm font-semibold text-[var(--muted)]">
-                      문제 이미지 없음
+                      이미지 없음
                     </span>
                   )}
                 </div>
-                <div className="flex flex-col justify-between gap-3">
+                <div className="flex flex-col justify-center gap-3">
                   <div>
                     <p className="text-sm font-bold">문제 이미지</p>
-                    <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                      이미지는 Storage에 저장됩니다.
+                    <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+                      사진을 첨부하면 Gemini가 문제를 읽고 정답이 왜 맞는지 풀이를 작성합니다.
                     </p>
                   </div>
-                  <div className="flex flex-wrap gap-2">
-                    <label className="rounded-lg bg-white px-3 py-2 text-sm font-bold text-[var(--accent)] ring-1 ring-[var(--line)]">
-                      이미지 선택
-                      <input
-                        accept="image/jpeg,image/png,image/webp"
-                        className="sr-only"
-                        onChange={handleImageUpload}
-                        type="file"
-                      />
-                    </label>
+                  {imagePreviewUrl ? (
                     <button
-                      className="rounded-lg border border-[var(--line)] px-3 py-2 text-sm font-bold text-[var(--muted)]"
-                      disabled={!imagePreviewUrl}
+                      className="w-fit rounded-lg border border-[var(--line)] px-3 py-2 text-sm font-bold text-[var(--muted)]"
                       onClick={clearImage}
                       type="button"
                     >
                       이미지 제거
                     </button>
-                  </div>
+                  ) : null}
                 </div>
               </div>
 
@@ -649,6 +757,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                 <input
                   className="rounded-lg border border-[var(--line)] bg-[var(--app-bg)] px-3 py-3 text-sm outline-none focus:border-[var(--accent)] focus:bg-white"
                   onChange={(event) => updateDraft("subject", event.target.value)}
+                  placeholder="예: 수학"
                   required
                   value={draft.subject}
                 />
@@ -664,13 +773,13 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                 />
               </label>
               <label className="grid gap-2 text-sm font-semibold sm:col-span-2">
-                문항 제목
+                문제 제목
                 <input
                   className="rounded-lg border border-[var(--line)] bg-[var(--app-bg)] px-3 py-3 text-sm outline-none focus:border-[var(--accent)] focus:bg-white"
                   onChange={(event) =>
                     updateDraft("question_title", event.target.value)
                   }
-                  placeholder="예: 역수 변환 문제"
+                  placeholder="예: 분수 나눗셈 계산"
                   required
                   value={draft.question_title}
                 />
@@ -688,11 +797,11 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                 />
               </label>
               <label className="grid gap-2 text-sm font-semibold sm:col-span-2">
-                내가 쓴 답/풀이
+                내가 쓴 답과 풀이
                 <textarea
                   className="min-h-28 resize-none rounded-lg border border-[var(--line)] bg-[var(--app-bg)] px-3 py-3 text-sm leading-6 outline-none focus:border-[var(--accent)] focus:bg-white"
                   onChange={(event) => updateDraft("wrong_answer", event.target.value)}
-                  placeholder="내가 적은 답, 틀린 풀이 과정, 헷갈린 부분을 적습니다."
+                  placeholder="내가 적은 답, 풀이 과정, 헷갈린 부분을 적습니다."
                   required
                   value={draft.wrong_answer}
                 />
@@ -704,17 +813,17 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                   onChange={(event) =>
                     updateDraft("correct_answer", event.target.value)
                   }
-                  placeholder="정답만 적어도 됩니다. 예: 3/2, x=4, ⑤"
+                  placeholder="예: 3/2, x=4"
                   required
                   value={draft.correct_answer}
                 />
               </label>
               <label className="grid gap-2 text-sm font-semibold">
                 <span className="flex flex-wrap items-center justify-between gap-2">
-                  문제의 옳은 풀이
+                  정답 풀이
                   <button
                     className="rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-xs font-bold text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:text-[var(--muted)]"
-                    disabled={isGeneratingSolution || !imageFile}
+                    disabled={!canGenerateSolution}
                     onClick={generateSolutionFromImage}
                     type="button"
                   >
@@ -726,22 +835,28 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                   onChange={(event) =>
                     updateDraft("provided_solution", event.target.value)
                   }
-                  placeholder="문제 이미지를 첨부하고 정답을 입력한 뒤 AI 풀이 생성을 누르면 채워집니다."
+                  placeholder="직접 풀이를 적거나, 문제 이미지와 정답을 넣고 AI 풀이 생성을 누르세요."
                   value={draft.provided_solution}
                 />
+                <span className="text-xs font-medium leading-5 text-[var(--muted)]">
+                  {aiButtonReason}
+                </span>
               </label>
               <label className="grid gap-2 text-sm font-semibold sm:col-span-2">
-                교사 메모
+                추가 메모
                 <textarea
                   className="min-h-24 resize-none rounded-lg border border-[var(--line)] bg-[var(--app-bg)] px-3 py-3 text-sm leading-6 outline-none focus:border-[var(--accent)] focus:bg-white"
                   onChange={(event) => updateDraft("explanation", event.target.value)}
+                  placeholder="선생님 피드백, 내가 느낀 헷갈린 지점 등을 적습니다."
                   value={draft.explanation}
                 />
               </label>
               <div className="flex flex-col gap-3 sm:col-span-2 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-[var(--muted)]">새 문제 저장 시 결과 패널이 갱신됩니다.</p>
+                <p className="text-sm text-[var(--muted)]">
+                  저장하면 새 기록이 맨 위에 추가되고, 결과 패널이 바로 갱신됩니다.
+                </p>
                 <button
-                  className="rounded-lg bg-[var(--accent)] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#0c7779]"
+                  className="rounded-lg bg-[var(--accent)] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#0c7779] disabled:bg-[var(--disabled)]"
                   disabled={isSaving || isGeneratingSolution}
                   type="submit"
                 >
@@ -749,153 +864,43 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                 </button>
               </div>
             </form>
-          </section>
+          </div>
 
-          <section className="border border-[var(--line)] bg-white p-5 shadow-sm">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <h2 className="text-xl font-bold">분석 결과</h2>
-              </div>
-              <span className="rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
-                {selectedRecord ? statusLabels[selectedRecord.status] : "대기"}
-              </span>
-            </div>
-
-            {selectedRecord ? (
-              <div className="mt-6 grid gap-4">
-                {selectedRecord.image_url ? (
-                  <div className="overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--app-bg)]">
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img
-                      alt={`${selectedRecord.question_title} 문제 이미지`}
-                      className="max-h-64 w-full object-contain"
-                      src={selectedRecord.image_url}
-                    />
-                  </div>
-                ) : null}
-                <div className="rounded-lg border border-[var(--line)] p-4">
-                  <p className="text-sm font-semibold text-[var(--muted)]">
-                    오답 유형
-                  </p>
-                  <p className="mt-2 text-2xl font-bold">{selectedRecord.pattern}</p>
-                </div>
-                <div className="rounded-lg border border-[var(--line)] p-4">
-                  <div className="flex items-center justify-between text-sm font-semibold">
-                    <span className="text-[var(--muted)]">신뢰도</span>
-                    <span>{selectedRecord.confidence}%</span>
-                  </div>
-                  <div className="mt-3 h-2 rounded-lg bg-[var(--app-bg)]">
-                    <div
-                      className="h-2 rounded-lg bg-[var(--accent)]"
-                      style={{ width: `${selectedRecord.confidence}%` }}
-                    />
-                  </div>
-                </div>
-                <div className="rounded-lg border border-[var(--line)] bg-rose-50 p-4">
-                  <p className="text-sm font-semibold text-rose-700">
-                    왜 틀렸나
-                  </p>
-                  <p className="mt-2 whitespace-pre-line text-sm leading-6">
-                    {selectedRecord.mistake_reason}
-                  </p>
-                </div>
-                <div className="rounded-lg border border-[var(--line)] p-4">
-                  <p className="text-sm font-semibold text-[var(--muted)]">
-                    문제 풀이
-                  </p>
-                  <p className="mt-2 whitespace-pre-line text-sm leading-6">
-                    {selectedRecord.correct_solution}
-                  </p>
-                </div>
-                {selectedRecord.detailed_explanation ? (
-                  <div className="rounded-lg border border-[var(--line)] p-4">
-                    <p className="text-sm font-semibold text-[var(--muted)]">
-                      상세 해설
-                    </p>
-                    <p className="mt-2 whitespace-pre-line text-sm leading-6">
-                      {selectedRecord.detailed_explanation}
-                    </p>
-                  </div>
-                ) : null}
-                <div className="rounded-lg border border-[var(--line)] bg-[var(--accent-soft)] p-4">
-                  <p className="text-sm font-semibold text-[var(--accent)]">
-                    추천 복습 방향
-                  </p>
-                  <p className="mt-2 text-sm leading-6">
-                    {selectedRecord.review_direction}
-                  </p>
-                </div>
-                {selectedRecord.solution_strategy ? (
-                  <div className="rounded-lg border border-[var(--line)] p-4">
-                    <p className="text-sm font-semibold text-[var(--muted)]">
-                      풀이 전략
-                    </p>
-                    <p className="mt-2 text-sm leading-6">
-                      {selectedRecord.solution_strategy}
-                    </p>
-                  </div>
-                ) : null}
-                {selectedRecord.solution_steps.length > 0 ? (
-                  <div className="rounded-lg border border-[var(--line)] p-4">
-                    <p className="text-sm font-semibold text-[var(--muted)]">
-                      풀이 순서
-                    </p>
-                    <ol className="mt-3 grid list-decimal gap-2 pl-5 text-sm leading-6">
-                      {selectedRecord.solution_steps.map((step) => (
-                        <li key={step}>{step}</li>
-                      ))}
-                    </ol>
-                  </div>
-                ) : null}
-                {selectedRecord.review_topics.length > 0 ? (
-                  <div className="rounded-lg border border-[var(--line)] p-4">
-                    <p className="text-sm font-semibold text-[var(--muted)]">
-                      복습할 것
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {selectedRecord.review_topics.map((topic) => (
-                        <span
-                          className="rounded-lg bg-[var(--app-bg)] px-3 py-2 text-xs font-bold text-[var(--muted)]"
-                          key={topic}
-                        >
-                          {topic}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <p className="mt-6 text-sm text-[var(--muted)]">
-                기록을 선택하거나 새 오답을 저장하면 결과가 표시됩니다.
-              </p>
-            )}
-          </section>
-        </div>
+          <ResultPanel
+            selectedRecord={selectedRecord}
+            statusLabels={statusLabels}
+          />
+        </section>
 
         <section
           className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]"
-          id="통계"
+          id="stats"
         >
           <article className="border border-[var(--line)] bg-white p-5 shadow-sm">
             <h2 className="text-xl font-bold">오답 유형 분포</h2>
             <div className="mt-5 grid gap-4">
-              {stats.patternEntries.map(([pattern, count]) => (
-                <div key={pattern}>
-                  <div className="flex justify-between text-sm font-semibold">
-                    <span>{pattern}</span>
-                    <span className="text-[var(--muted)]">{count}건</span>
+              {stats.patternEntries.length > 0 ? (
+                stats.patternEntries.map(([pattern, count]) => (
+                  <div key={pattern}>
+                    <div className="flex justify-between text-sm font-semibold">
+                      <span>{pattern}</span>
+                      <span className="text-[var(--muted)]">{count}건</span>
+                    </div>
+                    <div className="mt-2 h-2 rounded-lg bg-[var(--app-bg)]">
+                      <div
+                        className="h-2 rounded-lg bg-[var(--accent)]"
+                        style={{
+                          width: `${Math.max(12, (count / stats.total) * 100)}%`,
+                        }}
+                      />
+                    </div>
                   </div>
-                  <div className="mt-2 h-2 rounded-lg bg-[var(--app-bg)]">
-                    <div
-                      className="h-2 rounded-lg bg-[var(--accent)]"
-                      style={{
-                        width: `${Math.max(12, (count / stats.total) * 100)}%`,
-                      }}
-                    />
-                  </div>
-                </div>
-              ))}
+                ))
+              ) : (
+                <p className="text-sm text-[var(--muted)]">
+                  문제를 저장하면 유형 분포가 표시됩니다.
+                </p>
+              )}
             </div>
           </article>
 
@@ -903,39 +908,70 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
             <h2 className="text-xl font-bold">취약 단원</h2>
             <div className="mt-5 rounded-lg border border-[var(--line)] bg-[var(--app-bg)] p-4">
               <p className="text-sm font-semibold text-[var(--muted)]">
-                현재 최다 기록 단원
+                현재 가장 많이 기록된 단원
               </p>
               <p className="mt-2 text-2xl font-bold">
                 {stats.topUnit?.[0] ?? "아직 없음"}
               </p>
               <p className="mt-2 text-sm text-[var(--muted)]">
-                {stats.topUnit ? `${stats.topUnit[1]}건 누적` : "오답을 저장하면 표시됩니다."}
+                {stats.topUnit
+                  ? `${stats.topUnit[1]}건 누적`
+                  : "오답을 저장하면 표시됩니다."}
               </p>
             </div>
           </article>
         </section>
 
-        <section className="border border-[var(--line)] bg-white p-5 shadow-sm" id="기록">
-          <div className="flex flex-col gap-1 sm:flex-row sm:items-end sm:justify-between">
+        <section className="border border-[var(--line)] bg-white p-5 shadow-sm" id="records">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
               <h2 className="text-xl font-bold">최근 분석 기록</h2>
+              <p className="mt-2 text-sm text-[var(--muted)]">
+                제목을 누르면 오른쪽 결과 패널이 해당 문제로 바뀝니다.
+              </p>
             </div>
             <span className="text-sm font-semibold text-[var(--accent)]">
               총 {records.length}건
             </span>
           </div>
 
+          <div className="mt-5 grid gap-3 sm:grid-cols-[1fr_180px]">
+            <input
+              className="rounded-lg border border-[var(--line)] bg-[var(--app-bg)] px-3 py-3 text-sm outline-none focus:border-[var(--accent)] focus:bg-white"
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="문제, 단원, 유형 검색"
+              value={searchQuery}
+            />
+            <select
+              className="rounded-lg border border-[var(--line)] bg-[var(--app-bg)] px-3 py-3 text-sm font-semibold outline-none focus:border-[var(--accent)] focus:bg-white"
+              onChange={(event) =>
+                setStatusFilter(event.target.value as ReviewStatus | "all")
+              }
+              value={statusFilter}
+            >
+              {Object.entries(statusFilterLabels).map(([status, label]) => (
+                <option key={status} value={status}>
+                  {label}
+                </option>
+              ))}
+            </select>
+          </div>
+
           <div className="mt-5 overflow-hidden border border-[var(--line)]">
             <div className="hidden grid-cols-[1fr_0.8fr_0.8fr_90px_120px] bg-[var(--app-bg)] px-4 py-3 text-sm font-bold text-[var(--muted)] md:grid">
               <span>문항</span>
               <span>단원</span>
-              <span>패턴</span>
+              <span>유형</span>
               <span>신뢰도</span>
               <span>상태</span>
             </div>
-            {records.map((record) => (
+            {filteredRecords.map((record) => (
               <div
-                className="grid gap-3 border-t border-[var(--line)] px-4 py-4 text-sm transition hover:bg-[var(--app-bg)] md:grid-cols-[1fr_0.8fr_0.8fr_90px_120px] md:items-center"
+                className={`grid gap-3 border-t border-[var(--line)] px-4 py-4 text-sm transition md:grid-cols-[1fr_0.8fr_0.8fr_90px_120px] md:items-center ${
+                  selectedRecord?.id === record.id
+                    ? "bg-[var(--accent-soft)]"
+                    : "hover:bg-[var(--app-bg)]"
+                }`}
                 key={record.id}
               >
                 <button
@@ -945,7 +981,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                 >
                   {record.question_title}
                   {record.image_url ? (
-                    <span className="ml-2 rounded bg-[var(--accent-soft)] px-2 py-1 text-xs text-[var(--accent)]">
+                    <span className="ml-2 rounded bg-white px-2 py-1 text-xs text-[var(--accent)] ring-1 ring-[var(--line)]">
                       이미지
                     </span>
                   ) : null}
@@ -968,21 +1004,21 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                 </select>
               </div>
             ))}
-            {records.length === 0 ? (
+            {filteredRecords.length === 0 ? (
               <div className="border-t border-[var(--line)] px-4 py-8 text-center text-sm text-[var(--muted)]">
-                저장된 문제가 없습니다.
+                표시할 기록이 없습니다.
               </div>
             ) : null}
           </div>
         </section>
 
-        <section className="border border-[var(--line)] bg-white p-5 shadow-sm" id="설정">
+        <section className="border border-[var(--line)] bg-white p-5 shadow-sm" id="settings">
           <form className="grid gap-4" onSubmit={saveSettings}>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
                 <h2 className="text-xl font-bold">설정</h2>
                 <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-                  {schemaReady ? "연결 완료" : "SQL 설정 필요"}
+                  기본 입력값과 샘플 표시 여부를 사용자별로 저장합니다.
                 </p>
               </div>
               <span
@@ -992,7 +1028,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                     : "bg-amber-50 text-amber-700"
                 }`}
               >
-                {schemaReady ? "DB 연결" : "대기"}
+                {schemaReady ? "DB 연결" : "설정 필요"}
               </span>
             </div>
 
@@ -1038,7 +1074,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                   }
                   type="checkbox"
                 />
-                새 문제 저장 후 결과 보기
+                새 문제 저장 후 결과 바로 보기
               </label>
               <label className="flex items-center gap-2 text-sm font-semibold text-[var(--muted)]">
                 <input
@@ -1049,13 +1085,13 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                   }
                   type="checkbox"
                 />
-                기록 없을 때 샘플 표시
+                기록이 없을 때 샘플 표시
               </label>
             </div>
 
             <div className="flex justify-end">
               <button
-                className="rounded-lg bg-[var(--accent)] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#0c7779]"
+                className="rounded-lg bg-[var(--accent)] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#0c7779] disabled:bg-[var(--disabled)]"
                 disabled={isSavingSettings}
                 type="submit"
               >
@@ -1066,5 +1102,135 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
         </section>
       </section>
     </div>
+  );
+}
+
+function ResultPanel({
+  selectedRecord,
+  statusLabels,
+}: {
+  selectedRecord: AnalysisRecord | null;
+  statusLabels: Record<ReviewStatus, string>;
+}) {
+  return (
+    <section className="border border-[var(--line)] bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 className="text-xl font-bold">분석 결과</h2>
+          <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
+            선택한 문제의 정답 풀이와 복습 방향입니다.
+          </p>
+        </div>
+        <span className="rounded-lg bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
+          {selectedRecord ? statusLabels[selectedRecord.status] : "대기"}
+        </span>
+      </div>
+
+      {selectedRecord ? (
+        <div className="mt-6 grid gap-4">
+          {selectedRecord.image_url ? (
+            <div className="overflow-hidden rounded-lg border border-[var(--line)] bg-[var(--app-bg)]">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                alt={`${selectedRecord.question_title} 문제 이미지`}
+                className="max-h-64 w-full object-contain"
+                src={selectedRecord.image_url}
+              />
+            </div>
+          ) : null}
+          <div className="rounded-lg border border-[var(--line)] p-4">
+            <p className="text-sm font-semibold text-[var(--muted)]">오답 유형</p>
+            <p className="mt-2 text-2xl font-bold">{selectedRecord.pattern}</p>
+          </div>
+          <div className="rounded-lg border border-[var(--line)] p-4">
+            <div className="flex items-center justify-between text-sm font-semibold">
+              <span className="text-[var(--muted)]">신뢰도</span>
+              <span>{selectedRecord.confidence}%</span>
+            </div>
+            <div className="mt-3 h-2 rounded-lg bg-[var(--app-bg)]">
+              <div
+                className="h-2 rounded-lg bg-[var(--accent)]"
+                style={{ width: `${selectedRecord.confidence}%` }}
+              />
+            </div>
+          </div>
+          <div className="rounded-lg border border-[var(--line)] bg-rose-50 p-4">
+            <p className="text-sm font-semibold text-rose-700">왜 틀렸나</p>
+            <p className="mt-2 whitespace-pre-line text-sm leading-6">
+              {selectedRecord.mistake_reason}
+            </p>
+          </div>
+          <div className="rounded-lg border border-[var(--line)] p-4">
+            <p className="text-sm font-semibold text-[var(--muted)]">
+              문제의 옳은 풀이
+            </p>
+            <p className="mt-2 whitespace-pre-line text-sm leading-6">
+              {selectedRecord.correct_solution}
+            </p>
+          </div>
+          {selectedRecord.detailed_explanation ? (
+            <div className="rounded-lg border border-[var(--line)] p-4">
+              <p className="text-sm font-semibold text-[var(--muted)]">
+                상세 해설
+              </p>
+              <p className="mt-2 whitespace-pre-line text-sm leading-6">
+                {selectedRecord.detailed_explanation}
+              </p>
+            </div>
+          ) : null}
+          <div className="rounded-lg border border-[var(--line)] bg-[var(--accent-soft)] p-4">
+            <p className="text-sm font-semibold text-[var(--accent)]">
+              추천 복습 방향
+            </p>
+            <p className="mt-2 text-sm leading-6">
+              {selectedRecord.review_direction}
+            </p>
+          </div>
+          {selectedRecord.solution_strategy ? (
+            <div className="rounded-lg border border-[var(--line)] p-4">
+              <p className="text-sm font-semibold text-[var(--muted)]">
+                풀이 전략
+              </p>
+              <p className="mt-2 text-sm leading-6">
+                {selectedRecord.solution_strategy}
+              </p>
+            </div>
+          ) : null}
+          {selectedRecord.solution_steps.length > 0 ? (
+            <div className="rounded-lg border border-[var(--line)] p-4">
+              <p className="text-sm font-semibold text-[var(--muted)]">
+                풀이 순서
+              </p>
+              <ol className="mt-3 grid list-decimal gap-2 pl-5 text-sm leading-6">
+                {selectedRecord.solution_steps.map((step) => (
+                  <li key={step}>{step}</li>
+                ))}
+              </ol>
+            </div>
+          ) : null}
+          {selectedRecord.review_topics.length > 0 ? (
+            <div className="rounded-lg border border-[var(--line)] p-4">
+              <p className="text-sm font-semibold text-[var(--muted)]">
+                복습할 것
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {selectedRecord.review_topics.map((topic) => (
+                  <span
+                    className="rounded-lg bg-[var(--app-bg)] px-3 py-2 text-xs font-bold text-[var(--muted)]"
+                    key={topic}
+                  >
+                    {topic}
+                  </span>
+                ))}
+              </div>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <p className="mt-6 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-5 text-sm leading-6 text-[var(--muted)]">
+          기록을 선택하거나 새 오답을 저장하면 결과가 표시됩니다.
+        </p>
+      )}
+    </section>
   );
 }

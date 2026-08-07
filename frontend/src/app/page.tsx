@@ -4,9 +4,9 @@ import { LoginForm } from "@/app/login-form";
 import { isSupabaseConfigured } from "@/lib/supabase/env";
 
 const loginStats = [
-  { label: "분석 준비", value: "3단계" },
+  { label: "입력 방식", value: "직접·이미지" },
   { label: "인증 기준", value: "Supabase" },
-  { label: "미리보기", value: "분리 운영" },
+  { label: "AI 풀이", value: "Gemini" },
 ];
 
 export default function LoginPage() {
@@ -17,11 +17,11 @@ export default function LoginPage() {
           <div>
             <p className="text-sm font-bold text-[var(--accent)]">Together</p>
             <h1 className="mt-3 max-w-2xl text-4xl font-bold leading-tight sm:text-5xl">
-              오답을 모으고, 패턴을 분류하고, 다음 복습을 정합니다.
+              틀린 문제를 모으고, 왜 틀렸는지 바로 복습합니다.
             </h1>
             <p className="mt-5 max-w-xl text-base leading-7 text-[var(--muted)]">
-              학생의 오답 데이터를 기반으로 유형과 취약 단원을 확인하는
-              학습 분석 서비스의 로그인 화면입니다.
+              오답 이미지와 정답을 넣으면 풀이를 정리하고, 오답 유형과 취약
+              단원을 사용자별 기록으로 관리합니다.
             </p>
           </div>
 
@@ -44,7 +44,8 @@ export default function LoginPage() {
           <div>
             <h2 className="text-2xl font-bold">로그인</h2>
             <p className="mt-2 text-sm leading-6 text-[var(--muted)]">
-              실제 분석 기능은 Supabase 로그인 이후 대시보드에서 사용합니다.
+              실제 분석, 저장, 복습 상태 변경은 로그인 후 대시보드에서 사용할 수
+              있습니다.
             </p>
           </div>
 
@@ -66,7 +67,7 @@ export default function LoginPage() {
               기능 미리보기
             </Link>
             <p className="text-center text-xs leading-5 text-[var(--muted)]">
-              미리보기에서는 기능 구성만 확인하고, 입력/분석/기록 기능은
+              미리보기에서는 기능 구성만 확인할 수 있고, 실제 입력과 저장은
               로그인 후 활성화됩니다.
             </p>
           </div>

@@ -74,7 +74,10 @@ export async function POST(request: Request) {
   const claimsResult = await supabase?.auth.getClaims();
 
   if (!claimsResult?.data?.claims || claimsResult.error) {
-    return NextResponse.json({ error: "로그인 후 이용할 수 있습니다." }, { status: 401 });
+    return NextResponse.json(
+      { error: "로그인 후 사용할 수 있습니다." },
+      { status: 401 },
+    );
   }
 
   if (!geminiApiKey) {
@@ -111,50 +114,52 @@ export async function POST(request: Request) {
       geminiApiKey,
     )}`,
     {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      contents: [
-        {
-          role: "user",
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        contents: [
+          {
+            role: "user",
+            parts: [
+              {
+                inline_data: {
+                  data: imageData.data,
+                  mime_type: imageData.mimeType,
+                },
+              },
+              {
+                text: [
+                  `과목: ${body.subject?.trim() || "미입력"}`,
+                  `단원: ${body.unit?.trim() || "미입력"}`,
+                  `사용자가 적은 문제 내용: ${
+                    body.problemStatement?.trim() ||
+                    "이미지 기준으로 문제를 읽어주세요."
+                  }`,
+                  `사용자가 쓴 답 또는 풀이: ${body.wrongAnswer?.trim() || "미입력"}`,
+                  `문제의 정답: ${correctAnswer}`,
+                  "",
+                  "요청:",
+                  "1. 이미지 속 문제를 먼저 읽고, 주어진 조건을 정리하세요.",
+                  "2. 정답이 왜 그 값인지 계산 과정이나 논리를 단계별로 설명하세요.",
+                  "3. 사용자의 답이 있다면 정답 풀이와 처음 달라지는 지점을 짚어주세요.",
+                  "4. 모르면 추측하지 말고 어떤 정보가 부족한지 말하세요.",
+                  "5. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
+                ].join("\n"),
+              },
+            ],
+          },
+        ],
+        system_instruction: {
           parts: [
             {
-              inline_data: {
-                data: imageData.data,
-                mime_type: imageData.mimeType,
-              },
-            },
-            {
-              text: [
-                `과목: ${body.subject?.trim() || "미입력"}`,
-                `단원: ${body.unit?.trim() || "미입력"}`,
-                `사용자가 적은 문제 내용: ${
-                  body.problemStatement?.trim() || "이미지 기준으로 읽어주세요."
-                }`,
-                `사용자가 쓴 답/풀이: ${body.wrongAnswer?.trim() || "미입력"}`,
-                `정답: ${correctAnswer}`,
-                "",
-                "요청:",
-                "1. 이미지 속 문제를 먼저 읽고 핵심 조건을 짧게 정리하세요.",
-                "2. 정답이 왜 그 값/선택지인지 풀이 과정을 단계별로 서술하세요.",
-                "3. 사용자가 쓴 답/풀이가 있으면, 어느 지점에서 옳은 풀이와 갈라지는지 설명하세요.",
-                "4. 답만 반복하거나 일반 공부 조언으로 채우지 마세요.",
-              ].join("\n"),
+              text:
+                "너는 한국어로 설명하는 수학/학습 튜터다. 문제 이미지와 사용자가 입력한 정답을 보고, 왜 그 정답이 맞는지 풀이를 설명한다. 이미지에서 문제를 읽을 수 없거나 정답이 이미지 내용과 맞는지 판단하기 어렵다면 추측하지 말고 부족한 정보를 명확히 말한다.",
             },
           ],
         },
-      ],
-      system_instruction: {
-        parts: [
-          {
-            text:
-              "너는 한국어 수학/학습 풀이 튜터다. 문제 이미지와 사용자가 입력한 정답을 보고, 왜 그 정답이 나오는지 풀이만 설명한다. 이미지에서 문제를 읽을 수 없거나 정답이 이미지 내용과 맞는지 판단할 수 없으면 모르는 척하지 말고 정확히 무엇이 부족한지 말한다.",
-          },
-        ],
-      },
-    }),
+      }),
     },
   );
 
@@ -170,7 +175,9 @@ export async function POST(request: Request) {
     return NextResponse.json(
       {
         detail: detailMessage,
-        error: detailMessage ? `${rateLimitMessage} (${detailMessage})` : rateLimitMessage,
+        error: detailMessage
+          ? `${rateLimitMessage} (${detailMessage})`
+          : rateLimitMessage,
       },
       { status: response.status },
     );

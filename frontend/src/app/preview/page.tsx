@@ -3,19 +3,23 @@ import Link from "next/link";
 const previewItems = [
   {
     title: "오답 입력",
-    description: "직접 입력, 업로드, 기존 DB 연동을 담을 입력 공간입니다.",
+    description:
+      "문제 내용, 내가 쓴 답, 정답, 풀이를 한 곳에 정리합니다. 이미지 첨부도 지원합니다.",
   },
   {
-    title: "AI 패턴 분류",
-    description: "개념 혼동, 계산 실수, 조건 누락 같은 오답 유형을 분류합니다.",
+    title: "AI 풀이 생성",
+    description:
+      "문제 이미지와 정답을 바탕으로 왜 그 정답이 나오는지 풀이를 작성합니다.",
   },
   {
-    title: "복습 방향 추천",
-    description: "분류 결과와 신뢰도를 바탕으로 다음 복습 방향을 제안합니다.",
+    title: "오답 유형 분류",
+    description:
+      "개념 혼동, 계산 실수, 조건 누락, 문제 해석 오류 같은 패턴을 분류합니다.",
   },
   {
-    title: "학습 시각화",
-    description: "유형 분포, 시간별 변화, 취약 단원 흐름을 보여줄 예정입니다.",
+    title: "복습 기록",
+    description:
+      "최근 분석 기록, 취약 단원, 복습 상태를 사용자별 DB 기록으로 관리합니다.",
   },
 ];
 
@@ -28,9 +32,8 @@ export default function PreviewPage() {
             <p className="text-sm font-bold text-[var(--accent)]">Together</p>
             <h1 className="mt-2 text-2xl font-bold">기능 미리보기</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-[var(--muted)]">
-              이 화면은 대시보드에 어떤 기능이 들어갈지만 안내합니다. 실제
-              입력, 분석, 기록 조회는 Supabase 로그인 후 대시보드에서
-              활성화됩니다.
+              이 화면은 로그인 전에 어떤 기능이 있는지만 보여줍니다. 실제 입력,
+              분석, 기록 저장은 로그인 후 대시보드에서 사용할 수 있습니다.
             </p>
           </div>
           <Link
