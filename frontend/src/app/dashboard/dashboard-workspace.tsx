@@ -61,7 +61,7 @@ const maxImageSize = 5 * 1024 * 1024;
 const defaultSettings: AnalysisSettings = {
   default_subject: "수학",
   default_source_type: "direct",
-  auto_select_new_record: true,
+  auto_select_new_record: false,
   show_sample_records: false,
 };
 
@@ -130,7 +130,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
         const visibleRecords = shouldUseSamples ? sampleAnalyses : loadedRecords;
 
         setRecords(visibleRecords);
-        setSelectedRecord(visibleRecords[0] ?? null);
+        setSelectedRecord(null);
         setSyncMessage(
           loadedRecords.length > 0
             ? "DB 기록을 불러왔습니다."
@@ -276,6 +276,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     return {
       ...defaultSettings,
       ...value,
+      auto_select_new_record: false,
       default_source_type:
         value.default_source_type && value.default_source_type in sourceLabels
           ? value.default_source_type
@@ -502,9 +503,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     );
 
     setRecords((currentRecords) => [nextRecord, ...currentRecords]);
-    if (settings.auto_select_new_record) {
-      setSelectedRecord(nextRecord);
-    }
+    setSelectedRecord(null);
     setDraft({
       ...emptyDraft,
       source_type: settings.default_source_type,
@@ -516,7 +515,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
         ? "이미지 업로드는 실패했지만 분석 기록은 화면에 반영했습니다. Storage 버킷 설정을 확인해주세요."
         : error
           ? "DB 저장에 실패해 이 화면에만 임시 반영했습니다. SQL 스키마와 권한을 확인해주세요."
-          : "분석 결과를 저장했습니다.",
+          : "분석 결과를 저장했습니다. 최근 분석 기록에서 해당 문제를 클릭하면 결과를 열 수 있습니다.",
     );
     setIsSaving(false);
   }
@@ -562,6 +561,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
 
     const payload: AnalysisSettings = {
       ...settings,
+      auto_select_new_record: false,
       user_id: userId,
     };
     const { data, error } = await supabase
@@ -853,7 +853,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
               </label>
               <div className="flex flex-col gap-3 sm:col-span-2 sm:flex-row sm:items-center sm:justify-between">
                 <p className="text-sm text-[var(--muted)]">
-                  저장하면 새 기록이 맨 위에 추가되고, 결과 패널이 바로 갱신됩니다.
+                  저장하면 새 기록이 맨 위에 추가됩니다. 결과는 기록에서 클릭해 열 수 있습니다.
                 </p>
                 <button
                   className="rounded-lg bg-[var(--accent)] px-4 py-3 text-sm font-bold text-white transition hover:bg-[#0c7779] disabled:bg-[var(--disabled)]"
@@ -927,7 +927,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
             <div>
               <h2 className="text-xl font-bold">최근 분석 기록</h2>
               <p className="mt-2 text-sm text-[var(--muted)]">
-                제목을 누르면 오른쪽 결과 패널이 해당 문제로 바뀝니다.
+                제목을 누르면 저장된 분석 결과를 열 수 있습니다.
               </p>
             </div>
             <span className="text-sm font-semibold text-[var(--accent)]">
@@ -975,7 +975,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                 key={record.id}
               >
                 <button
-                  className="text-left font-bold"
+                  className="text-left font-bold text-[var(--app-fg)] underline-offset-4 hover:underline"
                   onClick={() => setSelectedRecord(record)}
                   type="button"
                 >
@@ -1065,17 +1065,6 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="flex items-center gap-2 text-sm font-semibold text-[var(--muted)]">
-                <input
-                  checked={settings.auto_select_new_record}
-                  className="h-4 w-4 accent-[var(--accent)]"
-                  onChange={(event) =>
-                    updateSettings("auto_select_new_record", event.target.checked)
-                  }
-                  type="checkbox"
-                />
-                새 문제 저장 후 결과 바로 보기
-              </label>
               <label className="flex items-center gap-2 text-sm font-semibold text-[var(--muted)]">
                 <input
                   checked={settings.show_sample_records}
@@ -1228,7 +1217,7 @@ function ResultPanel({
         </div>
       ) : (
         <p className="mt-6 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-5 text-sm leading-6 text-[var(--muted)]">
-          기록을 선택하거나 새 오답을 저장하면 결과가 표시됩니다.
+          저장된 기록의 제목을 클릭하면 분석 결과가 이곳에 열립니다.
         </p>
       )}
     </section>
