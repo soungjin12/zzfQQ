@@ -32,15 +32,17 @@ const emptyDraft: AnalysisDraft = {
 
 const sourceLabels: Record<InputSource, string> = {
   direct: "직접 입력",
-  upload: "파일/이미지",
+  upload: "이미지/파일",
   database: "DB 기준",
 };
 
 const sourceDescriptions: Record<InputSource, string> = {
-  direct: "문제와 풀이를 직접 적어서 바로 분석합니다.",
-  upload: "텍스트 파일이나 문제 이미지를 붙여 분석 정확도를 높입니다.",
+  direct: "사진 없이 문제 본문과 풀이를 직접 적습니다.",
+  upload: "문제 사진이나 텍스트 파일을 불러와 입력을 줄입니다.",
   database: "저장된 기록을 기준으로 누적 경향을 확인합니다.",
 };
+
+const selectableSourceTypes: InputSource[] = ["direct", "upload"];
 
 const statusLabels: Record<ReviewStatus, string> = {
   pending: "복습 대기",
@@ -273,14 +275,17 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
   }
 
   function normalizeSettings(value: Partial<AnalysisSettings>): AnalysisSettings {
+    const defaultSourceType =
+      value.default_source_type &&
+      selectableSourceTypes.includes(value.default_source_type)
+        ? value.default_source_type
+        : defaultSettings.default_source_type;
+
     return {
       ...defaultSettings,
       ...value,
       auto_select_new_record: false,
-      default_source_type:
-        value.default_source_type && value.default_source_type in sourceLabels
-          ? value.default_source_type
-          : defaultSettings.default_source_type,
+      default_source_type: defaultSourceType,
     };
   }
 
@@ -660,8 +665,8 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
               </button>
             </div>
 
-            <div className="mt-5 grid gap-2 sm:grid-cols-3">
-              {(Object.keys(sourceLabels) as InputSource[]).map((sourceType) => (
+            <div className="mt-5 grid gap-2 sm:grid-cols-2">
+              {selectableSourceTypes.map((sourceType) => (
                 <button
                   className={`rounded-lg border px-3 py-3 text-left text-sm transition ${
                     draft.source_type === sourceType
@@ -679,6 +684,10 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                 </button>
               ))}
             </div>
+
+            <p className="mt-3 rounded-lg bg-[var(--app-bg)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
+              저장된 DB 기록은 아래 최근 분석 기록과 통계에서 확인합니다.
+            </p>
 
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               <label className="grid gap-2 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-4 text-sm font-semibold">
@@ -1055,7 +1064,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                   }
                   value={settings.default_source_type}
                 >
-                  {(Object.keys(sourceLabels) as InputSource[]).map((sourceType) => (
+                  {selectableSourceTypes.map((sourceType) => (
                     <option key={sourceType} value={sourceType}>
                       {sourceLabels[sourceType]}
                     </option>
