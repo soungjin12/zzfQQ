@@ -57,6 +57,15 @@ const statusFilterLabels: Record<ReviewStatus | "all", string> = {
   done: "완료",
 };
 
+type DashboardView = "analysis" | "records" | "patterns" | "settings";
+
+const dashboardViews: Array<{ label: string; value: DashboardView }> = [
+  { label: "분석", value: "analysis" },
+  { label: "기록", value: "records" },
+  { label: "오답 패턴", value: "patterns" },
+  { label: "설정", value: "settings" },
+];
+
 const allowedImageTypes = ["image/jpeg", "image/png", "image/webp"];
 const maxImageSize = 5 * 1024 * 1024;
 
@@ -71,28 +80,37 @@ type DashboardWorkspaceProps = {
   userEmail: string | null;
 };
 
+type ImageSolveResponse = {
+  answer?: string;
+  detail?: string;
+  error?: string;
+  problemStatement?: string;
+  questionTitle?: string;
+  solution?: string;
+  subject?: string;
+  unit?: string;
+};
+
 export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
   const [draft, setDraft] = useState<AnalysisDraft>(emptyDraft);
   const [records, setRecords] = useState<AnalysisRecord[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<AnalysisRecord | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isGeneratingSolution, setIsGeneratingSolution] = useState(false);
   const [settings, setSettings] = useState<AnalysisSettings>(defaultSettings);
   const [schemaReady, setSchemaReady] = useState(false);
-  const [syncMessage, setSyncMessage] = useState("기록을 불러오는 중입니다.");
+  const [syncMessage, setSyncMessage] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<ReviewStatus | "all">("all");
+  const [activeView, setActiveView] = useState<DashboardView>("analysis");
 
   useEffect(() => {
     let isMounted = true;
 
     async function loadRecords() {
-      setIsLoading(true);
-
       const supabase = createClient();
       const [recordsResult, settingsResult] = await Promise.all([
         supabase
@@ -121,7 +139,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
         setSchemaReady(false);
         setRecords([]);
         setSelectedRecord(null);
-        setSyncMessage("DB 설정을 확인해야 합니다. 입력한 문제는 임시로만 보일 수 있습니다.");
+        setSyncMessage("DB 설정을 확인해야 합니다.");
       } else {
         setSchemaReady(true);
         const loadedRecords = ((recordsResult.data ?? []) as AnalysisRecord[]).map(
@@ -133,16 +151,8 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
 
         setRecords(visibleRecords);
         setSelectedRecord(null);
-        setSyncMessage(
-          loadedRecords.length > 0
-            ? "DB 기록을 불러왔습니다."
-            : shouldUseSamples
-              ? "저장된 기록이 없어 샘플을 표시합니다."
-              : "아직 저장된 문제가 없습니다.",
-        );
+        setSyncMessage("");
       }
-
-      setIsLoading(false);
     }
 
     loadRecords();
@@ -234,7 +244,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
   const aiButtonReason =
     isUploadMode && !imageFile
       ? "이미지를 첨부하면 AI가 정답과 풀이를 생성합니다."
-      : "이미지를 바탕으로 정답과 풀이를 생성합니다. 정답을 미리 적으면 검증까지 함께 합니다.";
+      : "AI가 이미지에서 문제, 정답, 풀이를 자동 작성합니다.";
   const problemStatementPlaceholder = isUploadMode
     ? "텍스트 파일을 불러오거나, 이미지에서 잘 안 보일 수 있는 조건을 추가로 적습니다."
     : "문제 본문, 조건, 보기를 직접 적습니다.";
@@ -263,6 +273,14 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
 
   function updateDraft(field: keyof AnalysisDraft, value: string) {
     setDraft((currentDraft) => ({ ...currentDraft, [field]: value }));
+  }
+
+  function changeView(view: DashboardView) {
+    setActiveView(view);
+
+    if (!isGeneratingSolution && !isSaving && !isSavingSettings) {
+      setSyncMessage("");
+    }
   }
 
   function updateSource(sourceType: InputSource) {
@@ -345,7 +363,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     setSyncMessage("텍스트 파일 내용을 문제 입력칸에 반영했습니다.");
   }
 
-  function handleImageUpload(event: ChangeEvent<HTMLInputElement>) {
+  async function handleImageUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
 
     if (!file) {
@@ -373,7 +391,8 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       source_type: "upload",
       question_title: currentDraft.question_title || file.name,
     }));
-    setSyncMessage("문제 이미지를 첨부했습니다. AI가 정답과 풀이를 생성할 수 있습니다.");
+    setSyncMessage("이미지를 읽는 중입니다.");
+    await generateSolutionFromImage(file);
   }
 
   function clearImage() {
@@ -401,8 +420,10 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     });
   }
 
-  async function generateSolutionFromImage() {
-    if (!imageFile) {
+  async function generateSolutionFromImage(fileOverride?: File) {
+    const targetFile = fileOverride ?? imageFile;
+
+    if (!targetFile) {
       setSyncMessage("문제 이미지를 먼저 첨부해주세요.");
       return;
     }
@@ -411,7 +432,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     setSyncMessage("AI가 문제 이미지를 읽고 정답과 풀이를 생성하는 중입니다.");
 
     try {
-      const imageDataUrl = await readImageAsDataUrl(imageFile);
+      const imageDataUrl = await readImageAsDataUrl(targetFile);
       const response = await fetch("/api/solve-image", {
         method: "POST",
         headers: {
@@ -426,12 +447,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
           wrongAnswer: draft.wrong_answer,
         }),
       });
-      const data = (await response.json()) as {
-        answer?: string;
-        detail?: string;
-        error?: string;
-        solution?: string;
-      };
+      const data = (await response.json()) as ImageSolveResponse;
 
       if (!response.ok || !data.solution) {
         setSyncMessage(data.error ?? "AI 풀이 생성에 실패했습니다.");
@@ -440,15 +456,28 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
 
       setDraft((currentDraft) => ({
         ...currentDraft,
+        problem_statement: currentDraft.problem_statement.trim()
+          ? currentDraft.problem_statement
+          : (data.problemStatement ?? ""),
+        question_title: currentDraft.question_title.trim()
+          ? currentDraft.question_title === targetFile.name
+            ? (data.questionTitle ?? currentDraft.question_title)
+            : currentDraft.question_title
+          : (data.questionTitle ?? targetFile.name),
         correct_answer: currentDraft.correct_answer.trim()
           ? currentDraft.correct_answer
           : (data.answer ?? ""),
         provided_solution: data.solution ?? "",
+        subject:
+          currentDraft.subject.trim() && currentDraft.subject !== settings.default_subject
+            ? currentDraft.subject
+            : (data.subject || currentDraft.subject || settings.default_subject),
+        unit: currentDraft.unit.trim() ? currentDraft.unit : (data.unit ?? ""),
       }));
       setSyncMessage(
-        data.answer
-          ? "AI가 정답과 풀이를 입력칸에 반영했습니다."
-          : "AI 풀이를 정답 풀이 입력칸에 반영했습니다.",
+        [data.questionTitle, data.answer, data.solution].some(Boolean)
+          ? "AI가 이미지 내용을 입력칸에 반영했습니다."
+          : "AI가 이미지를 읽었지만 자동 입력할 내용이 부족합니다.",
       );
     } catch {
       setSyncMessage("AI 풀이 생성 중 오류가 발생했습니다.");
@@ -620,59 +649,39 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     <div className="grid flex-1 gap-4 py-4 lg:grid-cols-[220px_1fr]">
       <aside className="border border-[var(--line)] bg-white p-3 shadow-sm">
         <nav className="grid grid-cols-2 gap-2 lg:grid-cols-1">
-          {[
-            ["분석", "analysis"],
-            ["기록", "records"],
-            ["통계", "stats"],
-            ["설정", "settings"],
-          ].map(([item, target], index) => (
-            <a
+          {dashboardViews.map((view) => (
+            <button
               className={`rounded-lg px-3 py-3 text-sm font-semibold transition ${
-                index === 0
+                activeView === view.value
                   ? "bg-[var(--accent)] text-white"
                   : "text-[var(--muted)] hover:bg-[var(--app-bg)] hover:text-[var(--app-fg)]"
               }`}
-              href={`#${target}`}
-              key={target}
+              key={view.value}
+              onClick={() => changeView(view.value)}
+              type="button"
             >
-              {item}
-            </a>
+              {view.label}
+            </button>
           ))}
         </nav>
       </aside>
 
       <section className="flex flex-col gap-4">
-        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          {overviewItems.map((item) => (
-            <article
-              className="border border-[var(--line)] bg-white p-4 shadow-sm"
-              key={item.label}
-            >
-              <p className="text-sm font-medium text-[var(--muted)]">
-                {item.label}
-              </p>
-              <div className="mt-3 flex items-end justify-between gap-3">
-                <strong className="text-3xl font-bold">{item.value}</strong>
-                <span className="rounded-lg bg-[var(--app-bg)] px-2 py-1 text-xs font-semibold text-[var(--muted)]">
-                  {item.note}
-                </span>
-              </div>
-            </article>
-          ))}
-        </div>
-
-        <div className="flex flex-col gap-2 border border-[var(--line)] bg-white px-4 py-3 text-sm text-[var(--muted)] shadow-sm sm:flex-row sm:items-center sm:justify-between">
-          <p>
-            <strong className="text-[var(--app-fg)]">상태</strong>
-            <span className="ml-2">{isLoading ? "동기화 중" : syncMessage}</span>
+        <div className="flex flex-col gap-2 border border-[var(--line)] bg-white px-4 py-3 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm font-bold">
+            현재 페이지: {dashboardViews.find((view) => view.value === activeView)?.label}
           </p>
-          <p className="text-xs">사용자: {userEmail ?? "세션 확인됨"}</p>
+          <p className="text-xs text-[var(--muted)]">{userEmail ?? "로그인됨"}</p>
         </div>
 
-        <section
-          className="grid gap-4 xl:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]"
-          id="analysis"
-        >
+        {syncMessage ? (
+          <p className="border border-[var(--line)] bg-white px-4 py-3 text-sm text-[var(--muted)] shadow-sm">
+            {syncMessage}
+          </p>
+        ) : null}
+
+        {activeView === "analysis" ? (
+        <section className="grid gap-4" id="analysis">
           <div className="border border-[var(--line)] bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div>
@@ -776,7 +785,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                     <div>
                       <p className="text-sm font-bold">이미지 미리보기</p>
                       <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-                        이미지와 정답을 기준으로 Gemini 풀이를 생성합니다.
+                        Gemini가 이미지를 읽고 문제, 정답, 풀이를 채웁니다.
                       </p>
                     </div>
                     {imagePreviewUrl ? (
@@ -867,7 +876,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                     <button
                       className="rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-xs font-bold text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:text-[var(--muted)]"
                       disabled={!canGenerateSolution}
-                      onClick={generateSolutionFromImage}
+                      onClick={() => generateSolutionFromImage()}
                       type="button"
                     >
                       {isGeneratingSolution ? "생성 중" : "AI 풀이 생성"}
@@ -911,16 +920,33 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
               </div>
             </form>
           </div>
-
-          <ResultPanel
-            selectedRecord={selectedRecord}
-            statusLabels={statusLabels}
-          />
         </section>
+        ) : null}
+
+        {activeView === "patterns" ? (
+          <>
+        <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+          {overviewItems.map((item) => (
+            <article
+              className="border border-[var(--line)] bg-white p-4 shadow-sm"
+              key={item.label}
+            >
+              <p className="text-sm font-medium text-[var(--muted)]">
+                {item.label}
+              </p>
+              <div className="mt-3 flex items-end justify-between gap-3">
+                <strong className="text-3xl font-bold">{item.value}</strong>
+                <span className="rounded-lg bg-[var(--app-bg)] px-2 py-1 text-xs font-semibold text-[var(--muted)]">
+                  {item.note}
+                </span>
+              </div>
+            </article>
+          ))}
+        </div>
 
         <section
           className="grid gap-4 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]"
-          id="stats"
+          id="patterns"
         >
           <article className="border border-[var(--line)] bg-white p-5 shadow-sm">
             <h2 className="text-xl font-bold">오답 유형 분포</h2>
@@ -967,7 +993,11 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
             </div>
           </article>
         </section>
+          </>
+        ) : null}
 
+        {activeView === "records" ? (
+        <section className="grid gap-4 xl:grid-cols-[minmax(0,1.1fr)_minmax(320px,0.9fr)]">
         <section className="border border-[var(--line)] bg-white p-5 shadow-sm" id="records">
           <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
             <div>
@@ -1057,7 +1087,14 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
             ) : null}
           </div>
         </section>
+          <ResultPanel
+            selectedRecord={selectedRecord}
+            statusLabels={statusLabels}
+          />
+        </section>
+        ) : null}
 
+        {activeView === "settings" ? (
         <section className="border border-[var(--line)] bg-white p-5 shadow-sm" id="settings">
           <form className="grid gap-4" onSubmit={saveSettings}>
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
@@ -1135,6 +1172,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
             </div>
           </form>
         </section>
+        ) : null}
       </section>
     </div>
   );

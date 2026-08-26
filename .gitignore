@@ -1,2 +1,4 @@
 frontend/.npm-cache/
+frontend/.localappdata/
+frontend/.vercel-data/
 frontend/.env*.local

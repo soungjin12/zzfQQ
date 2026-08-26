@@ -42,7 +42,11 @@ type GeminiResponse = {
 
 type SolvedImageResult = {
   answer: string;
+  problemStatement: string;
+  questionTitle: string;
   solution: string;
+  subject: string;
+  unit: string;
 };
 
 const geminiApiKey = process.env.GEMINI_API_KEY ?? "";
@@ -129,13 +133,25 @@ function parseSolvedImageResult(value: string): SolvedImageResult {
   try {
     const parsed = JSON.parse(jsonCandidate) as Partial<SolvedImageResult>;
     const answer = typeof parsed.answer === "string" ? parsed.answer.trim() : "";
+    const problemStatement =
+      typeof parsed.problemStatement === "string"
+        ? parsed.problemStatement.trim()
+        : "";
+    const questionTitle =
+      typeof parsed.questionTitle === "string" ? parsed.questionTitle.trim() : "";
     const solution =
       typeof parsed.solution === "string" ? parsed.solution.trim() : "";
+    const subject = typeof parsed.subject === "string" ? parsed.subject.trim() : "";
+    const unit = typeof parsed.unit === "string" ? parsed.unit.trim() : "";
 
-    if (answer || solution) {
+    if (answer || solution || problemStatement || questionTitle || subject || unit) {
       return {
         answer,
+        problemStatement,
+        questionTitle,
         solution: solution || trimmedValue,
+        subject,
+        unit,
       };
     }
   } catch {
@@ -146,7 +162,11 @@ function parseSolvedImageResult(value: string): SolvedImageResult {
 
   return {
     answer: answerMatch?.[1]?.trim() ?? "",
+    problemStatement: "",
+    questionTitle: "",
     solution: trimmedValue,
+    subject: "",
+    unit: "",
   };
 }
 
@@ -206,7 +226,7 @@ export async function POST(request: Request) {
               "사용자가 정답을 입력하지 않았다면 문제를 직접 풀어서 가장 타당한 정답을 제시한다.",
               "이미지에서 문제를 읽을 수 없거나 조건이 부족하면 추측하지 말고 answer는 빈 문자열로 두고 solution에 부족한 정보를 설명한다.",
               "반드시 JSON만 반환한다. 마크다운 코드블록은 쓰지 않는다.",
-              '형식: {"answer":"최종 정답","solution":"학생이 이해할 수 있는 자세한 풀이"}',
+              '형식: {"subject":"과목","unit":"단원","questionTitle":"문제 제목","problemStatement":"이미지에서 읽은 문제 내용","answer":"최종 정답","solution":"학생이 이해할 수 있는 자세한 풀이"}',
               "",
               `과목: ${body.subject?.trim() || "미입력"}`,
               `단원: ${body.unit?.trim() || "미입력"}`,
@@ -219,12 +239,13 @@ export async function POST(request: Request) {
               "",
               "요청:",
               "1. 이미지 속 문제를 먼저 읽고, 주어진 조건을 정리하세요.",
-              "2. 정답이 미입력이면 직접 풀어서 최종 정답을 answer에 넣으세요.",
-              "3. 정답이 입력되어 있으면 그 정답이 맞는 이유를 설명하고, 틀린 정답으로 보이면 solution에 그 점을 분명히 쓰세요.",
-              "4. 계산 과정이나 논리를 단계별로 설명하세요.",
-              "5. 사용자의 답이 있다면 정답 풀이와 처음 달라지는 지점을 짚어주세요.",
-              "6. 모르면 추측하지 말고 어떤 정보가 부족한지 말하세요.",
-              "7. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
+              "2. 과목, 단원, 문제 제목, 문제 내용을 이미지에서 추론해 각각 subject, unit, questionTitle, problemStatement에 넣으세요.",
+              "3. 정답이 미입력이면 직접 풀어서 최종 정답을 answer에 넣으세요.",
+              "4. 정답이 입력되어 있으면 그 정답이 맞는 이유를 설명하고, 틀린 정답으로 보이면 solution에 그 점을 분명히 쓰세요.",
+              "5. 계산 과정이나 논리를 단계별로 설명하세요.",
+              "6. 사용자의 답이 있다면 정답 풀이와 처음 달라지는 지점을 짚어주세요.",
+              "7. 모르면 추측하지 말고 어떤 정보가 부족한지 말하세요.",
+              "8. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
             ].join("\n"),
           },
         ],
