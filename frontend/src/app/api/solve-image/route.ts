@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { makeMathReadable } from "@/lib/analysis/readable-math";
 import { createClient } from "@/lib/supabase/server";
 
 type SolveProblemRequest = {
@@ -170,6 +171,19 @@ function parseSolvedProblemResult(value: string): SolvedProblemResult {
   };
 }
 
+function normalizeSolvedProblemResult(
+  result: SolvedProblemResult,
+): SolvedProblemResult {
+  return {
+    ...result,
+    answer: makeMathReadable(result.answer),
+    problemStatement: makeMathReadable(result.problemStatement),
+    questionTitle: makeMathReadable(result.questionTitle),
+    solution: makeMathReadable(result.solution),
+    unit: makeMathReadable(result.unit),
+  };
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const claimsResult = await supabase?.auth.getClaims();
@@ -220,6 +234,9 @@ export async function POST(request: Request) {
       ? "이미지나 텍스트에서 문제를 읽을 수 없거나 조건이 부족하면 추측하지 말고 answer는 빈 문자열로 두고 solution에 부족한 정보를 설명한다."
       : "텍스트만으로 조건이 부족하면 추측하지 말고 answer는 빈 문자열로 두고 solution에 부족한 정보를 설명한다.",
     "반드시 JSON만 반환한다. 마크다운 코드블록은 쓰지 않는다.",
+    "풀이에는 LaTeX 문법을 쓰지 않는다. $$, \\(...\\), \\begin{pmatrix}, \\cdot, &, \\\\ 같은 표현을 금지한다.",
+    "행렬은 '1행 1열 = ...', '1행 2열 = ...'처럼 위치별 한국어 문장으로 설명한다.",
+    "수식이 필요하면 일반 텍스트 기호만 쓴다. 예: ×, ÷, /, =, 괄호.",
     '형식: {"subject":"과목","unit":"단원","questionTitle":"문제 제목","problemStatement":"문제 내용","answer":"최종 정답","solution":"학생이 이해할 수 있는 자세한 풀이"}',
     "",
     `과목: ${body.subject?.trim() || "미입력"}`,
@@ -240,7 +257,8 @@ export async function POST(request: Request) {
     "5. 계산 과정이나 논리를 단계별로 설명하세요.",
     "6. 사용자의 답이 있다면 정답 풀이와 처음 달라지는 지점을 짚어주세요.",
     "7. 모르면 추측하지 말고 어떤 정보가 부족한지 말하세요.",
-    "8. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
+    "8. 수식 덩어리만 쓰지 말고 일반 학생이 읽을 수 있는 말로 풀이하세요.",
+    "9. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
   ].join("\n");
   const input = [
     ...(imageData
@@ -295,7 +313,9 @@ export async function POST(request: Request) {
     );
   }
 
-  const solvedResult = parseSolvedProblemResult(getOutputText(result));
+  const solvedResult = normalizeSolvedProblemResult(
+    parseSolvedProblemResult(getOutputText(result)),
+  );
 
   if (!solvedResult.solution) {
     return NextResponse.json(

@@ -2,6 +2,7 @@
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { classifyWrongAnswer } from "@/lib/analysis/classifier";
+import { makeMathReadable } from "@/lib/analysis/readable-math";
 import { sampleAnalyses } from "@/lib/analysis/sample-data";
 import {
   analysisImageBucketName,
@@ -1228,7 +1229,7 @@ function ResultPanel({
           <div className="rounded-lg border border-[var(--line)] bg-rose-50 p-4">
             <p className="text-sm font-semibold text-rose-700">왜 틀렸나</p>
             <p className="mt-2 whitespace-pre-line text-sm leading-6">
-              {selectedRecord.mistake_reason}
+              {makeMathReadable(selectedRecord.mistake_reason)}
             </p>
           </div>
           <div className="rounded-lg border border-[var(--line)] p-4">
@@ -1236,7 +1237,7 @@ function ResultPanel({
               문제의 옳은 풀이
             </p>
             <p className="mt-2 whitespace-pre-line text-sm leading-6">
-              {selectedRecord.correct_solution}
+              {makeMathReadable(selectedRecord.correct_solution)}
             </p>
           </div>
           {selectedRecord.detailed_explanation ? (
@@ -1245,7 +1246,7 @@ function ResultPanel({
                 상세 해설
               </p>
               <p className="mt-2 whitespace-pre-line text-sm leading-6">
-                {selectedRecord.detailed_explanation}
+                {makeMathReadable(selectedRecord.detailed_explanation)}
               </p>
             </div>
           ) : null}
@@ -1254,7 +1255,7 @@ function ResultPanel({
               추천 복습 방향
             </p>
             <p className="mt-2 text-sm leading-6">
-              {selectedRecord.review_direction}
+              {makeMathReadable(selectedRecord.review_direction)}
             </p>
           </div>
           {selectedRecord.solution_strategy ? (
@@ -1263,7 +1264,7 @@ function ResultPanel({
                 풀이 전략
               </p>
               <p className="mt-2 text-sm leading-6">
-                {selectedRecord.solution_strategy}
+                {makeMathReadable(selectedRecord.solution_strategy)}
               </p>
             </div>
           ) : null}
@@ -1274,7 +1275,7 @@ function ResultPanel({
               </p>
               <ol className="mt-3 grid list-decimal gap-2 pl-5 text-sm leading-6">
                 {selectedRecord.solution_steps.map((step) => (
-                  <li key={step}>{step}</li>
+                  <li key={step}>{makeMathReadable(step)}</li>
                 ))}
               </ol>
             </div>
