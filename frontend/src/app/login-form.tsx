@@ -8,6 +8,8 @@ type LoginFormProps = {
   isSupabaseConfigured: boolean;
 };
 
+type AuthMode = "sign-in" | "sign-up";
+
 export function LoginForm({ isSupabaseConfigured }: LoginFormProps) {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -16,12 +18,13 @@ export function LoginForm({ isSupabaseConfigured }: LoginFormProps) {
     requestedNextPath?.startsWith("/") && !requestedNextPath.startsWith("//")
       ? requestedNextPath
       : "/dashboard";
+  const [authMode, setAuthMode] = useState<AuthMode>("sign-in");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState(
     isSupabaseConfigured
-      ? "등록된 계정으로 로그인하면 대시보드 기능을 사용할 수 있습니다."
+      ? "등록된 계정으로 로그인하거나 새 계정을 만들 수 있습니다."
       : "Supabase 프로젝트 URL과 Publishable Key 설정이 필요합니다.",
   );
 
@@ -34,13 +37,17 @@ export function LoginForm({ isSupabaseConfigured }: LoginFormProps) {
     }
 
     setIsLoading(true);
-    setMessage("로그인 확인 중입니다.");
+    setMessage(
+      authMode === "sign-in"
+        ? "로그인 확인 중입니다."
+        : "계정을 생성하는 중입니다.",
+    );
 
     const supabase = createClient();
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    const { data, error } =
+      authMode === "sign-in"
+        ? await supabase.auth.signInWithPassword({ email, password })
+        : await supabase.auth.signUp({ email, password });
 
     setIsLoading(false);
 
@@ -49,12 +56,53 @@ export function LoginForm({ isSupabaseConfigured }: LoginFormProps) {
       return;
     }
 
+    if (authMode === "sign-up" && !data.session) {
+      setMessage(
+        "계정은 생성됐지만 바로 로그인되지 않았습니다. Supabase의 이메일 확인 설정을 꺼야 즉시 로그인됩니다.",
+      );
+      return;
+    }
+
     router.push(nextPath);
     router.refresh();
   }
 
+  function selectMode(nextMode: AuthMode) {
+    setAuthMode(nextMode);
+    setMessage(
+      nextMode === "sign-in"
+        ? "등록된 계정으로 로그인합니다."
+        : "이메일 인증 메일 없이 계정을 생성합니다.",
+    );
+  }
+
   return (
     <form className="mt-6 grid gap-4" onSubmit={handleSubmit}>
+      <div className="grid grid-cols-2 gap-2 rounded-lg bg-[var(--app-bg)] p-1">
+        <button
+          className={`rounded-md px-3 py-2 text-sm font-bold ${
+            authMode === "sign-in"
+              ? "bg-white text-[var(--app-fg)] shadow-sm"
+              : "text-[var(--muted)]"
+          }`}
+          onClick={() => selectMode("sign-in")}
+          type="button"
+        >
+          로그인
+        </button>
+        <button
+          className={`rounded-md px-3 py-2 text-sm font-bold ${
+            authMode === "sign-up"
+              ? "bg-white text-[var(--app-fg)] shadow-sm"
+              : "text-[var(--muted)]"
+          }`}
+          onClick={() => selectMode("sign-up")}
+          type="button"
+        >
+          회원가입
+        </button>
+      </div>
+
       <label className="grid gap-2 text-sm font-semibold">
         이메일
         <input
@@ -94,7 +142,13 @@ export function LoginForm({ isSupabaseConfigured }: LoginFormProps) {
         disabled={!isSupabaseConfigured || isLoading}
         type="submit"
       >
-        {isLoading ? "로그인 중" : "로그인"}
+        {isLoading
+          ? authMode === "sign-in"
+            ? "로그인 중"
+            : "가입 중"
+          : authMode === "sign-in"
+            ? "로그인"
+            : "회원가입"}
       </button>
 
       <p className="min-h-5 text-center text-xs leading-5 text-[var(--muted)]">
