@@ -32,13 +32,13 @@ const emptyDraft: AnalysisDraft = {
 
 const sourceLabels: Record<InputSource, string> = {
   direct: "직접 입력",
-  upload: "이미지/파일",
+  upload: "이미지/파일 입력",
   database: "DB 기준",
 };
 
 const sourceDescriptions: Record<InputSource, string> = {
-  direct: "사진 없이 문제 본문과 풀이를 직접 적습니다.",
-  upload: "문제 사진이나 텍스트 파일을 불러와 입력을 줄입니다.",
+  direct: "문제 내용을 직접 적고 저장합니다.",
+  upload: "이미지나 텍스트 파일을 첨부합니다.",
   database: "저장된 기록을 기준으로 누적 경향을 확인합니다.",
 };
 
@@ -216,15 +216,24 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     { label: "정답", done: Boolean(draft.correct_answer.trim()) },
   ];
   const completedRequiredCount = requiredProgress.filter((item) => item.done).length;
+  const isUploadMode = draft.source_type === "upload";
   const canGenerateSolution =
+    isUploadMode &&
     Boolean(imageFile) &&
     Boolean(draft.correct_answer.trim()) &&
     !isGeneratingSolution;
-  const aiButtonReason = !imageFile
-    ? "이미지를 첨부하면 AI 풀이를 만들 수 있습니다."
-    : !draft.correct_answer.trim()
-      ? "정답을 먼저 입력해야 풀이를 생성합니다."
-      : "이미지와 정답을 바탕으로 풀이를 생성합니다.";
+  const aiButtonReason =
+    isUploadMode && !imageFile
+      ? "이미지를 첨부하면 AI 풀이를 만들 수 있습니다."
+      : isUploadMode && !draft.correct_answer.trim()
+        ? "정답을 먼저 입력해야 풀이를 생성합니다."
+        : "이미지와 정답을 바탕으로 풀이를 생성합니다.";
+  const problemStatementPlaceholder = isUploadMode
+    ? "텍스트 파일을 불러오거나, 이미지에서 잘 안 보일 수 있는 조건을 추가로 적습니다."
+    : "문제 본문, 조건, 보기를 직접 적습니다.";
+  const solutionPlaceholder = isUploadMode
+    ? "문제 이미지와 정답을 넣고 AI 풀이 생성을 누르거나, 직접 풀이를 적습니다."
+    : "정답이 왜 맞는지 직접 풀이를 적습니다.";
 
   const overviewItems = [
     { label: "분석한 문제", value: String(stats.total), note: "내 기록 기준" },
@@ -254,6 +263,12 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       ...currentDraft,
       source_type: sourceType,
     }));
+    if (sourceType === "direct") {
+      clearImage();
+      setSyncMessage("직접 입력 모드입니다.");
+    } else {
+      setSyncMessage("이미지 또는 텍스트 파일을 첨부할 수 있습니다.");
+    }
   }
 
   function normalizeRecord(record: AnalysisRecord): AnalysisRecord {
@@ -685,24 +700,28 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
               ))}
             </div>
 
-            <p className="mt-3 rounded-lg bg-[var(--app-bg)] px-3 py-2 text-xs leading-5 text-[var(--muted)]">
-              저장된 DB 기록은 아래 최근 분석 기록과 통계에서 확인합니다.
-            </p>
-
-            <div className="mt-4 grid gap-3 sm:grid-cols-2">
-              <label className="grid gap-2 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-4 text-sm font-semibold">
-                텍스트 파일 불러오기
-                <input accept=".txt,.md" onChange={handleUpload} type="file" />
-              </label>
-              <label className="grid gap-2 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-4 text-sm font-semibold">
-                문제 이미지 첨부
-                <input
-                  accept="image/jpeg,image/png,image/webp"
-                  onChange={handleImageUpload}
-                  type="file"
-                />
-              </label>
-            </div>
+            {isUploadMode ? (
+              <div className="mt-4 grid gap-3 sm:grid-cols-2">
+                <label className="grid gap-2 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-4 text-sm font-semibold">
+                  파일 입력
+                  <input accept=".txt,.md" onChange={handleUpload} type="file" />
+                  <span className="text-xs font-medium text-[var(--muted)]">
+                    TXT, MD 파일 내용을 문제 내용에 넣습니다.
+                  </span>
+                </label>
+                <label className="grid gap-2 rounded-lg border border-dashed border-[var(--line)] bg-[var(--app-bg)] p-4 text-sm font-semibold">
+                  이미지 입력
+                  <input
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={handleImageUpload}
+                    type="file"
+                  />
+                  <span className="text-xs font-medium text-[var(--muted)]">
+                    JPG, PNG, WebP 이미지를 첨부합니다.
+                  </span>
+                </label>
+              </div>
+            ) : null}
 
             <div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--app-bg)] p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -727,39 +746,41 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
             </div>
 
             <form className="mt-5 grid gap-4 sm:grid-cols-2" onSubmit={handleSubmit}>
-              <div className="grid gap-3 rounded-lg border border-[var(--line)] bg-[var(--app-bg)] p-4 sm:col-span-2 sm:grid-cols-[220px_1fr]">
-                <div className="flex min-h-36 items-center justify-center overflow-hidden rounded-lg border border-[var(--line)] bg-white">
-                  {imagePreviewUrl ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      alt="첨부한 문제 이미지 미리보기"
-                      className="max-h-56 w-full object-contain"
-                      src={imagePreviewUrl}
-                    />
-                  ) : (
-                    <span className="px-4 text-center text-sm font-semibold text-[var(--muted)]">
-                      이미지 없음
-                    </span>
-                  )}
-                </div>
-                <div className="flex flex-col justify-center gap-3">
-                  <div>
-                    <p className="text-sm font-bold">문제 이미지</p>
-                    <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
-                      사진을 첨부하면 Gemini가 문제를 읽고 정답이 왜 맞는지 풀이를 작성합니다.
-                    </p>
+              {isUploadMode ? (
+                <div className="grid gap-3 rounded-lg border border-[var(--line)] bg-[var(--app-bg)] p-4 sm:col-span-2 sm:grid-cols-[220px_1fr]">
+                  <div className="flex min-h-36 items-center justify-center overflow-hidden rounded-lg border border-[var(--line)] bg-white">
+                    {imagePreviewUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        alt="첨부한 문제 이미지 미리보기"
+                        className="max-h-56 w-full object-contain"
+                        src={imagePreviewUrl}
+                      />
+                    ) : (
+                      <span className="px-4 text-center text-sm font-semibold text-[var(--muted)]">
+                        이미지 없음
+                      </span>
+                    )}
                   </div>
-                  {imagePreviewUrl ? (
-                    <button
-                      className="w-fit rounded-lg border border-[var(--line)] px-3 py-2 text-sm font-bold text-[var(--muted)]"
-                      onClick={clearImage}
-                      type="button"
-                    >
-                      이미지 제거
-                    </button>
-                  ) : null}
+                  <div className="flex flex-col justify-center gap-3">
+                    <div>
+                      <p className="text-sm font-bold">이미지 미리보기</p>
+                      <p className="mt-1 text-sm leading-6 text-[var(--muted)]">
+                        이미지와 정답을 기준으로 Gemini 풀이를 생성합니다.
+                      </p>
+                    </div>
+                    {imagePreviewUrl ? (
+                      <button
+                        className="w-fit rounded-lg border border-[var(--line)] px-3 py-2 text-sm font-bold text-[var(--muted)]"
+                        onClick={clearImage}
+                        type="button"
+                      >
+                        이미지 제거
+                      </button>
+                    ) : null}
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
               <label className="grid gap-2 text-sm font-semibold">
                 과목
@@ -800,7 +821,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                   onChange={(event) =>
                     updateDraft("problem_statement", event.target.value)
                   }
-                  placeholder="문제 본문, 조건, 보기, 이미지 속 내용을 적습니다."
+                  placeholder={problemStatementPlaceholder}
                   required
                   value={draft.problem_statement}
                 />
@@ -830,26 +851,30 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
               <label className="grid gap-2 text-sm font-semibold">
                 <span className="flex flex-wrap items-center justify-between gap-2">
                   정답 풀이
-                  <button
-                    className="rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-xs font-bold text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:text-[var(--muted)]"
-                    disabled={!canGenerateSolution}
-                    onClick={generateSolutionFromImage}
-                    type="button"
-                  >
-                    {isGeneratingSolution ? "생성 중" : "AI 풀이 생성"}
-                  </button>
+                  {isUploadMode ? (
+                    <button
+                      className="rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-xs font-bold text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:text-[var(--muted)]"
+                      disabled={!canGenerateSolution}
+                      onClick={generateSolutionFromImage}
+                      type="button"
+                    >
+                      {isGeneratingSolution ? "생성 중" : "AI 풀이 생성"}
+                    </button>
+                  ) : null}
                 </span>
                 <textarea
                   className="min-h-24 resize-none rounded-lg border border-[var(--line)] bg-[var(--app-bg)] px-3 py-3 text-sm leading-6 outline-none focus:border-[var(--accent)] focus:bg-white"
                   onChange={(event) =>
                     updateDraft("provided_solution", event.target.value)
                   }
-                  placeholder="직접 풀이를 적거나, 문제 이미지와 정답을 넣고 AI 풀이 생성을 누르세요."
+                  placeholder={solutionPlaceholder}
                   value={draft.provided_solution}
                 />
-                <span className="text-xs font-medium leading-5 text-[var(--muted)]">
-                  {aiButtonReason}
-                </span>
+                {isUploadMode ? (
+                  <span className="text-xs font-medium leading-5 text-[var(--muted)]">
+                    {aiButtonReason}
+                  </span>
+                ) : null}
               </label>
               <label className="grid gap-2 text-sm font-semibold sm:col-span-2">
                 추가 메모

@@ -16,9 +16,21 @@ type GeminiErrorResponse = {
     message?: string;
     status?: string;
   };
+  errors?: Array<{
+    code?: string;
+    message?: string;
+  }>;
 };
 
 type GeminiResponse = {
+  output_text?: string;
+  steps?: Array<{
+    content?: Array<{
+      text?: string;
+      type?: string;
+    }>;
+    type?: string;
+  }>;
   candidates?: Array<{
     content?: {
       parts?: Array<{
@@ -48,6 +60,24 @@ function parseImageDataUrl(value: string) {
 
 function getOutputText(value: unknown) {
   const response = value as GeminiResponse;
+  const outputText = response.output_text?.trim();
+
+  if (outputText) {
+    return outputText;
+  }
+
+  const stepTexts =
+    response.steps?.flatMap(
+      (step) =>
+        step.content
+          ?.map((part) => part.text?.trim() ?? "")
+          .filter(Boolean) ?? [],
+    ) ?? [];
+
+  if (stepTexts.length > 0) {
+    return stepTexts.join("\n").trim();
+  }
+
   const texts =
     response.candidates?.flatMap(
       (candidate) =>
@@ -60,10 +90,15 @@ function getOutputText(value: unknown) {
 }
 
 function getGeminiErrorMessage(value: unknown) {
-  const error = (value as GeminiErrorResponse | null)?.error;
+  const response = value as GeminiErrorResponse | null;
+  const error = response?.error;
+  const errors = response?.errors ?? [];
 
   if (!error) {
-    return "";
+    return errors
+      .map((item) => [item.message, item.code].filter(Boolean).join(" / "))
+      .filter(Boolean)
+      .join(" | ");
   }
 
   return [error.message, error.status, error.code].filter(Boolean).join(" / ");
@@ -106,59 +141,50 @@ export async function POST(request: Request) {
     );
   }
 
-  const modelPath = geminiModel.startsWith("models/")
-    ? geminiModel
-    : `models/${geminiModel}`;
+  const interactionModel = geminiModel.replace(/^models\//, "");
   const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/${modelPath}:generateContent?key=${encodeURIComponent(
-      geminiApiKey,
-    )}`,
+    "https://generativelanguage.googleapis.com/v1beta/interactions",
     {
       method: "POST",
       headers: {
+        "Api-Revision": "2026-05-20",
         "Content-Type": "application/json",
+        "x-goog-api-key": geminiApiKey,
       },
       body: JSON.stringify({
-        contents: [
+        input: [
           {
-            role: "user",
-            parts: [
-              {
-                inline_data: {
-                  data: imageData.data,
-                  mime_type: imageData.mimeType,
-                },
-              },
-              {
-                text: [
-                  `과목: ${body.subject?.trim() || "미입력"}`,
-                  `단원: ${body.unit?.trim() || "미입력"}`,
-                  `사용자가 적은 문제 내용: ${
-                    body.problemStatement?.trim() ||
-                    "이미지 기준으로 문제를 읽어주세요."
-                  }`,
-                  `사용자가 쓴 답 또는 풀이: ${body.wrongAnswer?.trim() || "미입력"}`,
-                  `문제의 정답: ${correctAnswer}`,
-                  "",
-                  "요청:",
-                  "1. 이미지 속 문제를 먼저 읽고, 주어진 조건을 정리하세요.",
-                  "2. 정답이 왜 그 값인지 계산 과정이나 논리를 단계별로 설명하세요.",
-                  "3. 사용자의 답이 있다면 정답 풀이와 처음 달라지는 지점을 짚어주세요.",
-                  "4. 모르면 추측하지 말고 어떤 정보가 부족한지 말하세요.",
-                  "5. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
-                ].join("\n"),
-              },
-            ],
+            type: "image",
+            data: imageData.data,
+            mime_type: imageData.mimeType,
+          },
+          {
+            type: "text",
+            text: [
+              "너는 한국어로 설명하는 수학/학습 튜터다.",
+              "문제 이미지와 사용자가 입력한 정답을 보고, 왜 그 정답이 맞는지 풀이를 설명한다.",
+              "이미지에서 문제를 읽을 수 없거나 정답이 이미지 내용과 맞는지 판단하기 어렵다면 추측하지 말고 부족한 정보를 명확히 말한다.",
+              "",
+              `과목: ${body.subject?.trim() || "미입력"}`,
+              `단원: ${body.unit?.trim() || "미입력"}`,
+              `사용자가 적은 문제 내용: ${
+                body.problemStatement?.trim() ||
+                "이미지 기준으로 문제를 읽어주세요."
+              }`,
+              `사용자가 쓴 답 또는 풀이: ${body.wrongAnswer?.trim() || "미입력"}`,
+              `문제의 정답: ${correctAnswer}`,
+              "",
+              "요청:",
+              "1. 이미지 속 문제를 먼저 읽고, 주어진 조건을 정리하세요.",
+              "2. 정답이 왜 그 값인지 계산 과정이나 논리를 단계별로 설명하세요.",
+              "3. 사용자의 답이 있다면 정답 풀이와 처음 달라지는 지점을 짚어주세요.",
+              "4. 모르면 추측하지 말고 어떤 정보가 부족한지 말하세요.",
+              "5. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
+            ].join("\n"),
           },
         ],
-        system_instruction: {
-          parts: [
-            {
-              text:
-                "너는 한국어로 설명하는 수학/학습 튜터다. 문제 이미지와 사용자가 입력한 정답을 보고, 왜 그 정답이 맞는지 풀이를 설명한다. 이미지에서 문제를 읽을 수 없거나 정답이 이미지 내용과 맞는지 판단하기 어렵다면 추측하지 말고 부족한 정보를 명확히 말한다.",
-            },
-          ],
-        },
+        model: interactionModel,
+        store: false,
       }),
     },
   );
