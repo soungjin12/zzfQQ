@@ -40,6 +40,11 @@ type GeminiResponse = {
   }>;
 };
 
+type SolvedImageResult = {
+  answer: string;
+  solution: string;
+};
+
 const geminiApiKey = process.env.GEMINI_API_KEY ?? "";
 const geminiModel = process.env.GEMINI_MODEL ?? "gemini-3.6-flash";
 
@@ -104,6 +109,47 @@ function getGeminiErrorMessage(value: unknown) {
   return [error.message, error.status, error.code].filter(Boolean).join(" / ");
 }
 
+function stripMarkdownJsonFence(value: string) {
+  return value
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+function parseSolvedImageResult(value: string): SolvedImageResult {
+  const trimmedValue = stripMarkdownJsonFence(value);
+  const jsonStart = trimmedValue.indexOf("{");
+  const jsonEnd = trimmedValue.lastIndexOf("}");
+  const jsonCandidate =
+    jsonStart >= 0 && jsonEnd > jsonStart
+      ? trimmedValue.slice(jsonStart, jsonEnd + 1)
+      : trimmedValue;
+
+  try {
+    const parsed = JSON.parse(jsonCandidate) as Partial<SolvedImageResult>;
+    const answer = typeof parsed.answer === "string" ? parsed.answer.trim() : "";
+    const solution =
+      typeof parsed.solution === "string" ? parsed.solution.trim() : "";
+
+    if (answer || solution) {
+      return {
+        answer,
+        solution: solution || trimmedValue,
+      };
+    }
+  } catch {
+    // Gemini occasionally returns plain text despite being asked for JSON.
+  }
+
+  const answerMatch = trimmedValue.match(/(?:정답|답)\s*[:：]\s*([^\n]+)/);
+
+  return {
+    answer: answerMatch?.[1]?.trim() ?? "",
+    solution: trimmedValue,
+  };
+}
+
 export async function POST(request: Request) {
   const supabase = await createClient();
   const claimsResult = await supabase?.auth.getClaims();
@@ -134,13 +180,6 @@ export async function POST(request: Request) {
     );
   }
 
-  if (!correctAnswer) {
-    return NextResponse.json(
-      { error: "정답을 먼저 입력해야 풀이를 생성할 수 있습니다." },
-      { status: 400 },
-    );
-  }
-
   const interactionModel = geminiModel.replace(/^models\//, "");
   const response = await fetch(
     "https://generativelanguage.googleapis.com/v1beta/interactions",
@@ -162,8 +201,12 @@ export async function POST(request: Request) {
             type: "text",
             text: [
               "너는 한국어로 설명하는 수학/학습 튜터다.",
-              "문제 이미지와 사용자가 입력한 정답을 보고, 왜 그 정답이 맞는지 풀이를 설명한다.",
-              "이미지에서 문제를 읽을 수 없거나 정답이 이미지 내용과 맞는지 판단하기 어렵다면 추측하지 말고 부족한 정보를 명확히 말한다.",
+              "문제 이미지를 읽고 정답과 풀이를 작성한다.",
+              "사용자가 정답을 입력했다면 그 정답이 왜 맞는지 검증하면서 풀이한다.",
+              "사용자가 정답을 입력하지 않았다면 문제를 직접 풀어서 가장 타당한 정답을 제시한다.",
+              "이미지에서 문제를 읽을 수 없거나 조건이 부족하면 추측하지 말고 answer는 빈 문자열로 두고 solution에 부족한 정보를 설명한다.",
+              "반드시 JSON만 반환한다. 마크다운 코드블록은 쓰지 않는다.",
+              '형식: {"answer":"최종 정답","solution":"학생이 이해할 수 있는 자세한 풀이"}',
               "",
               `과목: ${body.subject?.trim() || "미입력"}`,
               `단원: ${body.unit?.trim() || "미입력"}`,
@@ -172,14 +215,16 @@ export async function POST(request: Request) {
                 "이미지 기준으로 문제를 읽어주세요."
               }`,
               `사용자가 쓴 답 또는 풀이: ${body.wrongAnswer?.trim() || "미입력"}`,
-              `문제의 정답: ${correctAnswer}`,
+              `사용자가 알고 있는 정답: ${correctAnswer || "미입력"}`,
               "",
               "요청:",
               "1. 이미지 속 문제를 먼저 읽고, 주어진 조건을 정리하세요.",
-              "2. 정답이 왜 그 값인지 계산 과정이나 논리를 단계별로 설명하세요.",
-              "3. 사용자의 답이 있다면 정답 풀이와 처음 달라지는 지점을 짚어주세요.",
-              "4. 모르면 추측하지 말고 어떤 정보가 부족한지 말하세요.",
-              "5. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
+              "2. 정답이 미입력이면 직접 풀어서 최종 정답을 answer에 넣으세요.",
+              "3. 정답이 입력되어 있으면 그 정답이 맞는 이유를 설명하고, 틀린 정답으로 보이면 solution에 그 점을 분명히 쓰세요.",
+              "4. 계산 과정이나 논리를 단계별로 설명하세요.",
+              "5. 사용자의 답이 있다면 정답 풀이와 처음 달라지는 지점을 짚어주세요.",
+              "6. 모르면 추측하지 말고 어떤 정보가 부족한지 말하세요.",
+              "7. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
             ].join("\n"),
           },
         ],
@@ -209,14 +254,14 @@ export async function POST(request: Request) {
     );
   }
 
-  const solution = getOutputText(result);
+  const solvedResult = parseSolvedImageResult(getOutputText(result));
 
-  if (!solution) {
+  if (!solvedResult.solution) {
     return NextResponse.json(
       { error: "Gemini가 풀이 텍스트를 반환하지 않았습니다." },
       { status: 502 },
     );
   }
 
-  return NextResponse.json({ solution });
+  return NextResponse.json(solvedResult);
 }

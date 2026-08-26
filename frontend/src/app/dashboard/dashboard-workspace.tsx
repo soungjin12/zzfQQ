@@ -209,30 +209,37 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     });
   }, [records, searchQuery, statusFilter]);
 
+  const isUploadMode = draft.source_type === "upload";
   const requiredProgress = [
     { label: "단원", done: Boolean(draft.unit.trim()) },
-    { label: "문제", done: Boolean(draft.problem_statement.trim()) },
+    {
+      label: "문제",
+      done: isUploadMode
+        ? Boolean(draft.problem_statement.trim() || imageFile)
+        : Boolean(draft.problem_statement.trim()),
+    },
     { label: "내 답", done: Boolean(draft.wrong_answer.trim()) },
-    { label: "정답", done: Boolean(draft.correct_answer.trim()) },
+    {
+      label: isUploadMode ? "정답 또는 AI" : "정답",
+      done: isUploadMode
+        ? Boolean(draft.correct_answer.trim() || imageFile)
+        : Boolean(draft.correct_answer.trim()),
+    },
   ];
   const completedRequiredCount = requiredProgress.filter((item) => item.done).length;
-  const isUploadMode = draft.source_type === "upload";
   const canGenerateSolution =
     isUploadMode &&
     Boolean(imageFile) &&
-    Boolean(draft.correct_answer.trim()) &&
     !isGeneratingSolution;
   const aiButtonReason =
     isUploadMode && !imageFile
-      ? "이미지를 첨부하면 AI 풀이를 만들 수 있습니다."
-      : isUploadMode && !draft.correct_answer.trim()
-        ? "정답을 먼저 입력해야 풀이를 생성합니다."
-        : "이미지와 정답을 바탕으로 풀이를 생성합니다.";
+      ? "이미지를 첨부하면 AI가 정답과 풀이를 생성합니다."
+      : "이미지를 바탕으로 정답과 풀이를 생성합니다. 정답을 미리 적으면 검증까지 함께 합니다.";
   const problemStatementPlaceholder = isUploadMode
     ? "텍스트 파일을 불러오거나, 이미지에서 잘 안 보일 수 있는 조건을 추가로 적습니다."
     : "문제 본문, 조건, 보기를 직접 적습니다.";
   const solutionPlaceholder = isUploadMode
-    ? "문제 이미지와 정답을 넣고 AI 풀이 생성을 누르거나, 직접 풀이를 적습니다."
+    ? "AI 풀이 생성을 누르면 이미지에서 문제를 읽고 정답과 풀이를 작성합니다."
     : "정답이 왜 맞는지 직접 풀이를 적습니다.";
 
   const overviewItems = [
@@ -366,7 +373,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       source_type: "upload",
       question_title: currentDraft.question_title || file.name,
     }));
-    setSyncMessage("문제 이미지를 첨부했습니다. 정답을 입력하면 AI 풀이를 만들 수 있습니다.");
+    setSyncMessage("문제 이미지를 첨부했습니다. AI가 정답과 풀이를 생성할 수 있습니다.");
   }
 
   function clearImage() {
@@ -400,13 +407,8 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       return;
     }
 
-    if (!draft.correct_answer.trim()) {
-      setSyncMessage("정답을 먼저 입력해야 AI 풀이를 생성할 수 있습니다.");
-      return;
-    }
-
     setIsGeneratingSolution(true);
-    setSyncMessage("AI가 문제 이미지를 읽고 풀이를 생성하는 중입니다.");
+    setSyncMessage("AI가 문제 이미지를 읽고 정답과 풀이를 생성하는 중입니다.");
 
     try {
       const imageDataUrl = await readImageAsDataUrl(imageFile);
@@ -425,6 +427,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
         }),
       });
       const data = (await response.json()) as {
+        answer?: string;
         detail?: string;
         error?: string;
         solution?: string;
@@ -437,9 +440,16 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
 
       setDraft((currentDraft) => ({
         ...currentDraft,
+        correct_answer: currentDraft.correct_answer.trim()
+          ? currentDraft.correct_answer
+          : (data.answer ?? ""),
         provided_solution: data.solution ?? "",
       }));
-      setSyncMessage("AI 풀이를 정답 풀이 입력칸에 반영했습니다.");
+      setSyncMessage(
+        data.answer
+          ? "AI가 정답과 풀이를 입력칸에 반영했습니다."
+          : "AI 풀이를 정답 풀이 입력칸에 반영했습니다.",
+      );
     } catch {
       setSyncMessage("AI 풀이 생성 중 오류가 발생했습니다.");
     } finally {
@@ -822,7 +832,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                     updateDraft("problem_statement", event.target.value)
                   }
                   placeholder={problemStatementPlaceholder}
-                  required
+                  required={!isUploadMode || !imageFile}
                   value={draft.problem_statement}
                 />
               </label>
@@ -843,8 +853,10 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                   onChange={(event) =>
                     updateDraft("correct_answer", event.target.value)
                   }
-                  placeholder="예: 3/2, x=4"
-                  required
+                  placeholder={
+                    isUploadMode ? "비워두면 AI가 이미지에서 풉니다." : "예: 3/2, x=4"
+                  }
+                  required={!isUploadMode}
                   value={draft.correct_answer}
                 />
               </label>
