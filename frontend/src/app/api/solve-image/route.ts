@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-type SolveImageRequest = {
+type SolveProblemRequest = {
   correctAnswer?: string;
   imageDataUrl?: string;
   problemStatement?: string;
@@ -40,7 +40,7 @@ type GeminiResponse = {
   }>;
 };
 
-type SolvedImageResult = {
+type SolvedProblemResult = {
   answer: string;
   problemStatement: string;
   questionTitle: string;
@@ -121,7 +121,7 @@ function stripMarkdownJsonFence(value: string) {
     .trim();
 }
 
-function parseSolvedImageResult(value: string): SolvedImageResult {
+function parseSolvedProblemResult(value: string): SolvedProblemResult {
   const trimmedValue = stripMarkdownJsonFence(value);
   const jsonStart = trimmedValue.indexOf("{");
   const jsonEnd = trimmedValue.lastIndexOf("}");
@@ -131,7 +131,7 @@ function parseSolvedImageResult(value: string): SolvedImageResult {
       : trimmedValue;
 
   try {
-    const parsed = JSON.parse(jsonCandidate) as Partial<SolvedImageResult>;
+    const parsed = JSON.parse(jsonCandidate) as Partial<SolvedProblemResult>;
     const answer = typeof parsed.answer === "string" ? parsed.answer.trim() : "";
     const problemStatement =
       typeof parsed.problemStatement === "string"
@@ -188,19 +188,76 @@ export async function POST(request: Request) {
     );
   }
 
-  const body = (await request.json()) as SolveImageRequest;
+  const body = (await request.json()) as SolveProblemRequest;
   const imageDataUrl = body.imageDataUrl?.trim() ?? "";
-  const imageData = parseImageDataUrl(imageDataUrl);
+  const imageData = imageDataUrl ? parseImageDataUrl(imageDataUrl) : null;
   const correctAnswer = body.correctAnswer?.trim() ?? "";
+  const problemStatement = body.problemStatement?.trim() ?? "";
 
-  if (!imageData) {
+  if (imageDataUrl && !imageData) {
     return NextResponse.json(
-      { error: "PNG, JPG, WebP 문제 이미지를 먼저 첨부해주세요." },
+      { error: "PNG, JPG, WebP 문제 이미지만 첨부할 수 있습니다." },
+      { status: 400 },
+    );
+  }
+
+  if (!imageData && !problemStatement) {
+    return NextResponse.json(
+      { error: "문제 내용 또는 문제 이미지를 입력해주세요." },
       { status: 400 },
     );
   }
 
   const interactionModel = geminiModel.replace(/^models\//, "");
+  const promptText = [
+    "너는 한국어로 설명하는 수학/학습 튜터다.",
+    imageData
+      ? "문제 이미지와 사용자가 입력한 텍스트를 함께 보고 정답과 풀이를 작성한다."
+      : "사용자가 직접 입력한 문제 내용을 보고 정답과 풀이를 작성한다.",
+    "사용자가 정답을 입력했다면 그 정답이 왜 맞는지 검증하면서 풀이한다.",
+    "사용자가 정답을 입력하지 않았다면 문제를 직접 풀어서 가장 타당한 정답을 제시한다.",
+    imageData
+      ? "이미지나 텍스트에서 문제를 읽을 수 없거나 조건이 부족하면 추측하지 말고 answer는 빈 문자열로 두고 solution에 부족한 정보를 설명한다."
+      : "텍스트만으로 조건이 부족하면 추측하지 말고 answer는 빈 문자열로 두고 solution에 부족한 정보를 설명한다.",
+    "반드시 JSON만 반환한다. 마크다운 코드블록은 쓰지 않는다.",
+    '형식: {"subject":"과목","unit":"단원","questionTitle":"문제 제목","problemStatement":"문제 내용","answer":"최종 정답","solution":"학생이 이해할 수 있는 자세한 풀이"}',
+    "",
+    `과목: ${body.subject?.trim() || "미입력"}`,
+    `단원: ${body.unit?.trim() || "미입력"}`,
+    `사용자가 적은 문제 내용: ${
+      problemStatement || (imageData ? "이미지 기준으로 문제를 읽어주세요." : "미입력")
+    }`,
+    `사용자가 쓴 답 또는 풀이: ${body.wrongAnswer?.trim() || "미입력"}`,
+    `사용자가 알고 있는 정답: ${correctAnswer || "미입력"}`,
+    "",
+    "요청:",
+    imageData
+      ? "1. 이미지 속 문제를 먼저 읽고, 주어진 조건을 정리하세요."
+      : "1. 입력된 문제의 조건을 먼저 정리하세요.",
+    "2. 과목, 단원, 문제 제목, 문제 내용을 추론해 각각 subject, unit, questionTitle, problemStatement에 넣으세요.",
+    "3. 정답이 미입력이면 직접 풀어서 최종 정답을 answer에 넣으세요.",
+    "4. 정답이 입력되어 있으면 그 정답이 맞는 이유를 설명하고, 틀린 정답으로 보이면 solution에 그 점을 분명히 쓰세요.",
+    "5. 계산 과정이나 논리를 단계별로 설명하세요.",
+    "6. 사용자의 답이 있다면 정답 풀이와 처음 달라지는 지점을 짚어주세요.",
+    "7. 모르면 추측하지 말고 어떤 정보가 부족한지 말하세요.",
+    "8. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
+  ].join("\n");
+  const input = [
+    ...(imageData
+      ? [
+          {
+            type: "image",
+            data: imageData.data,
+            mime_type: imageData.mimeType,
+          },
+        ]
+      : []),
+    {
+      type: "text",
+      text: promptText,
+    },
+  ];
+
   const response = await fetch(
     "https://generativelanguage.googleapis.com/v1beta/interactions",
     {
@@ -211,44 +268,7 @@ export async function POST(request: Request) {
         "x-goog-api-key": geminiApiKey,
       },
       body: JSON.stringify({
-        input: [
-          {
-            type: "image",
-            data: imageData.data,
-            mime_type: imageData.mimeType,
-          },
-          {
-            type: "text",
-            text: [
-              "너는 한국어로 설명하는 수학/학습 튜터다.",
-              "문제 이미지를 읽고 정답과 풀이를 작성한다.",
-              "사용자가 정답을 입력했다면 그 정답이 왜 맞는지 검증하면서 풀이한다.",
-              "사용자가 정답을 입력하지 않았다면 문제를 직접 풀어서 가장 타당한 정답을 제시한다.",
-              "이미지에서 문제를 읽을 수 없거나 조건이 부족하면 추측하지 말고 answer는 빈 문자열로 두고 solution에 부족한 정보를 설명한다.",
-              "반드시 JSON만 반환한다. 마크다운 코드블록은 쓰지 않는다.",
-              '형식: {"subject":"과목","unit":"단원","questionTitle":"문제 제목","problemStatement":"이미지에서 읽은 문제 내용","answer":"최종 정답","solution":"학생이 이해할 수 있는 자세한 풀이"}',
-              "",
-              `과목: ${body.subject?.trim() || "미입력"}`,
-              `단원: ${body.unit?.trim() || "미입력"}`,
-              `사용자가 적은 문제 내용: ${
-                body.problemStatement?.trim() ||
-                "이미지 기준으로 문제를 읽어주세요."
-              }`,
-              `사용자가 쓴 답 또는 풀이: ${body.wrongAnswer?.trim() || "미입력"}`,
-              `사용자가 알고 있는 정답: ${correctAnswer || "미입력"}`,
-              "",
-              "요청:",
-              "1. 이미지 속 문제를 먼저 읽고, 주어진 조건을 정리하세요.",
-              "2. 과목, 단원, 문제 제목, 문제 내용을 이미지에서 추론해 각각 subject, unit, questionTitle, problemStatement에 넣으세요.",
-              "3. 정답이 미입력이면 직접 풀어서 최종 정답을 answer에 넣으세요.",
-              "4. 정답이 입력되어 있으면 그 정답이 맞는 이유를 설명하고, 틀린 정답으로 보이면 solution에 그 점을 분명히 쓰세요.",
-              "5. 계산 과정이나 논리를 단계별로 설명하세요.",
-              "6. 사용자의 답이 있다면 정답 풀이와 처음 달라지는 지점을 짚어주세요.",
-              "7. 모르면 추측하지 말고 어떤 정보가 부족한지 말하세요.",
-              "8. 학생이 바로 복습할 수 있도록 한국어로 자세하지만 군더더기 없이 작성하세요.",
-            ].join("\n"),
-          },
-        ],
+        input,
         model: interactionModel,
         store: false,
       }),
@@ -275,7 +295,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const solvedResult = parseSolvedImageResult(getOutputText(result));
+  const solvedResult = parseSolvedProblemResult(getOutputText(result));
 
   if (!solvedResult.solution) {
     return NextResponse.json(

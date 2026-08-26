@@ -220,37 +220,34 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
   }, [records, searchQuery, statusFilter]);
 
   const isUploadMode = draft.source_type === "upload";
+  const hasProblemText = Boolean(draft.problem_statement.trim());
   const requiredProgress = [
     { label: "단원", done: Boolean(draft.unit.trim()) },
     {
       label: "문제",
       done: isUploadMode
-        ? Boolean(draft.problem_statement.trim() || imageFile)
-        : Boolean(draft.problem_statement.trim()),
+        ? Boolean(hasProblemText || imageFile)
+        : hasProblemText,
     },
     { label: "내 답", done: Boolean(draft.wrong_answer.trim()) },
-    {
-      label: isUploadMode ? "정답 또는 AI" : "정답",
-      done: isUploadMode
-        ? Boolean(draft.correct_answer.trim() || imageFile)
-        : Boolean(draft.correct_answer.trim()),
-    },
+    { label: "정답 또는 AI", done: Boolean(draft.correct_answer.trim()) },
   ];
   const completedRequiredCount = requiredProgress.filter((item) => item.done).length;
   const canGenerateSolution =
-    isUploadMode &&
-    Boolean(imageFile) &&
-    !isGeneratingSolution;
+    !isGeneratingSolution &&
+    (isUploadMode ? Boolean(imageFile || hasProblemText) : hasProblemText);
   const aiButtonReason =
-    isUploadMode && !imageFile
-      ? "이미지를 첨부하면 AI가 정답과 풀이를 생성합니다."
-      : "AI가 이미지에서 문제, 정답, 풀이를 자동 작성합니다.";
+    isUploadMode
+      ? imageFile
+        ? "AI가 이미지에서 문제, 정답, 풀이를 자동 작성합니다."
+        : "파일 내용을 바탕으로 정답과 풀이를 생성합니다."
+      : "AI가 입력한 문제를 풀고 정답과 풀이를 작성합니다.";
   const problemStatementPlaceholder = isUploadMode
     ? "텍스트 파일을 불러오거나, 이미지에서 잘 안 보일 수 있는 조건을 추가로 적습니다."
     : "문제 본문, 조건, 보기를 직접 적습니다.";
   const solutionPlaceholder = isUploadMode
-    ? "AI 풀이 생성을 누르면 이미지에서 문제를 읽고 정답과 풀이를 작성합니다."
-    : "정답이 왜 맞는지 직접 풀이를 적습니다.";
+    ? "AI 풀이 생성을 누르면 이미지나 파일 내용에서 정답과 풀이를 작성합니다."
+    : "AI 풀이 생성을 누르면 입력한 문제의 정답과 풀이를 작성합니다.";
 
   const overviewItems = [
     { label: "분석한 문제", value: String(stats.total), note: "내 기록 기준" },
@@ -392,7 +389,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       question_title: currentDraft.question_title || file.name,
     }));
     setSyncMessage("이미지를 읽는 중입니다.");
-    await generateSolutionFromImage(file);
+    await generateSolutionWithAi(file);
   }
 
   function clearImage() {
@@ -420,19 +417,24 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
     });
   }
 
-  async function generateSolutionFromImage(fileOverride?: File) {
+  async function generateSolutionWithAi(fileOverride?: File) {
     const targetFile = fileOverride ?? imageFile;
+    const targetFileName = targetFile?.name ?? "";
 
-    if (!targetFile) {
-      setSyncMessage("문제 이미지를 먼저 첨부해주세요.");
+    if (!targetFile && !draft.problem_statement.trim()) {
+      setSyncMessage("문제 내용 또는 문제 이미지를 먼저 입력해주세요.");
       return;
     }
 
     setIsGeneratingSolution(true);
-    setSyncMessage("AI가 문제 이미지를 읽고 정답과 풀이를 생성하는 중입니다.");
+    setSyncMessage(
+      targetFile
+        ? "AI가 문제 이미지를 읽고 정답과 풀이를 생성하는 중입니다."
+        : "AI가 입력한 문제를 풀고 정답과 풀이를 생성하는 중입니다.",
+    );
 
     try {
-      const imageDataUrl = await readImageAsDataUrl(targetFile);
+      const imageDataUrl = targetFile ? await readImageAsDataUrl(targetFile) : "";
       const response = await fetch("/api/solve-image", {
         method: "POST",
         headers: {
@@ -460,10 +462,10 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
           ? currentDraft.problem_statement
           : (data.problemStatement ?? ""),
         question_title: currentDraft.question_title.trim()
-          ? currentDraft.question_title === targetFile.name
+          ? targetFileName && currentDraft.question_title === targetFileName
             ? (data.questionTitle ?? currentDraft.question_title)
             : currentDraft.question_title
-          : (data.questionTitle ?? targetFile.name),
+          : (data.questionTitle ?? targetFileName),
         correct_answer: currentDraft.correct_answer.trim()
           ? currentDraft.correct_answer
           : (data.answer ?? ""),
@@ -476,8 +478,8 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       }));
       setSyncMessage(
         [data.questionTitle, data.answer, data.solution].some(Boolean)
-          ? "AI가 이미지 내용을 입력칸에 반영했습니다."
-          : "AI가 이미지를 읽었지만 자동 입력할 내용이 부족합니다.",
+          ? "AI가 분석 내용을 입력칸에 반영했습니다."
+          : "AI가 분석했지만 자동 입력할 내용이 부족합니다.",
       );
     } catch {
       setSyncMessage("AI 풀이 생성 중 오류가 발생했습니다.");
@@ -872,16 +874,14 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
               <label className="grid gap-2 text-sm font-semibold">
                 <span className="flex flex-wrap items-center justify-between gap-2">
                   정답 풀이
-                  {isUploadMode ? (
-                    <button
-                      className="rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-xs font-bold text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:text-[var(--muted)]"
-                      disabled={!canGenerateSolution}
-                      onClick={() => generateSolutionFromImage()}
-                      type="button"
-                    >
-                      {isGeneratingSolution ? "생성 중" : "AI 풀이 생성"}
-                    </button>
-                  ) : null}
+                  <button
+                    className="rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-xs font-bold text-[var(--accent)] transition hover:bg-[var(--accent-soft)] disabled:cursor-not-allowed disabled:text-[var(--muted)]"
+                    disabled={!canGenerateSolution}
+                    onClick={() => generateSolutionWithAi()}
+                    type="button"
+                  >
+                    {isGeneratingSolution ? "생성 중" : "AI 풀이 생성"}
+                  </button>
                 </span>
                 <textarea
                   className="min-h-24 resize-none rounded-lg border border-[var(--line)] bg-[var(--app-bg)] px-3 py-3 text-sm leading-6 outline-none focus:border-[var(--accent)] focus:bg-white"
@@ -891,11 +891,9 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
                   placeholder={solutionPlaceholder}
                   value={draft.provided_solution}
                 />
-                {isUploadMode ? (
-                  <span className="text-xs font-medium leading-5 text-[var(--muted)]">
-                    {aiButtonReason}
-                  </span>
-                ) : null}
+                <span className="text-xs font-medium leading-5 text-[var(--muted)]">
+                  {aiButtonReason}
+                </span>
               </label>
               <label className="grid gap-2 text-sm font-semibold sm:col-span-2">
                 추가 메모
