@@ -1,7 +1,7 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
-import { classifyWrongAnswer } from "@/lib/analysis/classifier";
+import { classifyWrongAnswer, type AiClassificationInput } from "@/lib/analysis/classifier";
 import { makeMathReadable } from "@/lib/analysis/readable-math";
 import { sampleAnalyses } from "@/lib/analysis/sample-data";
 import {
@@ -90,10 +90,19 @@ type ImageSolveResponse = {
   solution?: string;
   subject?: string;
   unit?: string;
+  pattern?: string;
+  confidence?: number;
+  mistakeReason?: string;
+  reviewDirection?: string;
+  detailedExplanation?: string;
+  reviewTopics?: string[];
+  solutionSteps?: string[];
+  solutionStrategy?: string;
 };
 
 export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
   const [draft, setDraft] = useState<AnalysisDraft>(emptyDraft);
+  const [aiClassification, setAiClassification] = useState<AiClassificationInput | null>(null);
   const [records, setRecords] = useState<AnalysisRecord[]>([]);
   const [selectedRecord, setSelectedRecord] = useState<AnalysisRecord | null>(null);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -340,6 +349,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       source_type: settings.default_source_type,
       subject: settings.default_subject,
     });
+    setAiClassification(null);
     clearImage();
     setSyncMessage("새 문제를 입력할 준비가 되었습니다.");
   }
@@ -477,6 +487,22 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
             : (data.subject || currentDraft.subject || settings.default_subject),
         unit: currentDraft.unit.trim() ? currentDraft.unit : (data.unit ?? ""),
       }));
+
+      if (data.pattern) {
+        setAiClassification({
+          pattern: data.pattern,
+          confidence: data.confidence,
+          mistakeReason: data.mistakeReason,
+          reviewDirection: data.reviewDirection,
+          detailedExplanation: data.detailedExplanation,
+          reviewTopics: data.reviewTopics,
+          solutionSteps: data.solutionSteps,
+          solutionStrategy: data.solutionStrategy,
+        });
+      } else {
+        setAiClassification(null);
+      }
+
       setSyncMessage(
         [data.questionTitle, data.answer, data.solution].some(Boolean)
           ? "AI가 분석 내용을 입력칸에 반영했습니다."
@@ -530,7 +556,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
 
     const supabase = createClient();
     const { data: userData } = await supabase.auth.getUser();
-    const classification = classifyWrongAnswer(draft);
+    const classification = classifyWrongAnswer(draft, aiClassification);
     const userId = userData.user?.id;
     const { imagePath, imageUrl, uploadError } = userId
       ? await uploadImage(userId)
@@ -571,6 +597,7 @@ export function DashboardWorkspace({ userEmail }: DashboardWorkspaceProps) {
       source_type: settings.default_source_type,
       subject: settings.default_subject,
     });
+    setAiClassification(null);
     clearImage();
     setSyncMessage(
       uploadError
