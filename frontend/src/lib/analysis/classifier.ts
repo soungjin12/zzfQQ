@@ -272,7 +272,50 @@ function buildProblemSolution(
     .join("\n\n");
 }
 
-export function classifyWrongAnswer(draft: AnalysisDraft) {
+export type AiClassificationInput = {
+  pattern?: string;
+  confidence?: number;
+  mistakeReason?: string;
+  reviewDirection?: string;
+  detailedExplanation?: string;
+  reviewTopics?: string[];
+  solutionSteps?: string[];
+  solutionStrategy?: string;
+};
+
+export function classifyWrongAnswer(
+  draft: AnalysisDraft,
+  aiClassification?: AiClassificationInput | null,
+) {
+  if (aiClassification && aiClassification.pattern) {
+    const providedSolution = draft.provided_solution.trim();
+    const solvedProblem =
+      buildFractionDivisionSolution(draft.problem_statement.trim()) ??
+      buildLinearEquationSolution(draft.problem_statement.trim());
+    const correctSolution = buildProblemSolution(draft, solvedProblem);
+    const solutionSteps =
+      aiClassification.solutionSteps && aiClassification.solutionSteps.length > 0
+        ? aiClassification.solutionSteps
+        : providedSolution
+          ? providedSolution
+            .split(/\n+/)
+            .map((step) => step.trim())
+            .filter(Boolean)
+          : (solvedProblem?.steps ?? []);
+
+    return {
+      confidence: aiClassification.confidence ?? 0,
+      correct_solution: correctSolution,
+      detailed_explanation: aiClassification.detailedExplanation ?? "",
+      mistake_reason: aiClassification.mistakeReason ?? "",
+      pattern: aiClassification.pattern,
+      review_direction: aiClassification.reviewDirection ?? "",
+      review_topics: aiClassification.reviewTopics ?? [],
+      solution_steps: solutionSteps,
+      solution_strategy: aiClassification.solutionStrategy ?? "",
+    };
+  }
+
   const joinedText = [
     draft.subject,
     draft.unit,
@@ -302,34 +345,34 @@ export function classifyWrongAnswer(draft: AnalysisDraft) {
   const correctSolution = buildProblemSolution(draft, solvedProblem);
   const solutionSteps = providedSolution
     ? providedSolution
-        .split(/\n+/)
-        .map((step) => step.trim())
-        .filter(Boolean)
+      .split(/\n+/)
+      .map((step) => step.trim())
+      .filter(Boolean)
     : (solvedProblem?.steps ?? []);
   const mistakeReason = providedSolution
     ? draft.explanation.trim() ||
-      "입력한 정답 풀이와 내가 쓴 풀이가 처음 달라지는 지점을 확인해야 합니다."
+    "입력한 정답 풀이와 내가 쓴 풀이가 처음 달라지는 지점을 확인해야 합니다."
     : solvedProblem
       ? draft.explanation.trim() || matchedRule.mistakeReason
       : "이 문항은 아직 정확한 풀이가 없어 오답 원인을 단정하기 어렵습니다.";
   const detailedExplanation = providedSolution
     ? [
-        "사용자가 입력한 정답 풀이를 기준으로 문제 풀이를 표시합니다.",
+      "사용자가 입력한 정답 풀이를 기준으로 문제 풀이를 표시합니다.",
+      draft.wrong_answer.trim()
+        ? "오답 분석은 내 풀이와 정답 풀이의 첫 차이를 찾는 방식으로 진행하세요."
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n")
+    : solvedProblem
+      ? [
+        `정답이 ${draft.correct_answer.trim() || solvedProblem.answer}인 이유는 풀이 과정에서 최종값이 ${solvedProblem.answer}로 정리되기 때문입니다.`,
         draft.wrong_answer.trim()
-          ? "오답 분석은 내 풀이와 정답 풀이의 첫 차이를 찾는 방식으로 진행하세요."
+          ? "내 풀이와 비교할 때는 결론보다 먼저 달라진 중간식을 찾아야 합니다."
           : "",
       ]
         .filter(Boolean)
         .join("\n")
-    : solvedProblem
-      ? [
-          `정답이 ${draft.correct_answer.trim() || solvedProblem.answer}인 이유는 풀이 과정에서 최종값이 ${solvedProblem.answer}로 정리되기 때문입니다.`,
-          draft.wrong_answer.trim()
-            ? "내 풀이와 비교할 때는 결론보다 먼저 달라진 중간식을 찾아야 합니다."
-            : "",
-        ]
-          .filter(Boolean)
-          .join("\n")
       : "";
 
   return {
